@@ -11,7 +11,7 @@ import { VisibilityType } from '@/components/visibility-selector';
 import { myProvider } from '@/lib/ai/models';
 
 // Define max token constant
-const MAX_TOKENS = 46096; // Adjust based on your model's requirements
+APP NAME = 4096; // Adjust based on your model's requirements
 
 export async function saveChatModelAsCookie(model: string) {
   const cookieStore = cookies();

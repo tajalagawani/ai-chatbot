@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  workflow-service:
+    build: .
+    container_name: workflow-service
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    environment:
+      - PORT=5001
+      - EXECUTION_TIMEOUT=300
+      - LOG_LEVEL=INFO
+      - FLASK_ENV=production
+    volumes:
+      - ./tmp:/app/tmp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

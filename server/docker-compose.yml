@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  act-executor:
+    build:
+      context: .
+      dockerfile: executor.Dockerfile
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./ser:/app/flows
+    environment:
+      - FLOW_RUNNER_IMAGE=flow-runner
+    networks:
+      - act-network
+
+  # The flow-runner service is built but not started
+  # It will be used as a base image for dynamic flow containers
+  flow-runner:
+    build:
+      context: .
+      dockerfile: flow_runner.Dockerfile
+    image: flow-runner
+    networks:
+      - act-network
+
+networks:
+  act-network:
+    driver: bridge

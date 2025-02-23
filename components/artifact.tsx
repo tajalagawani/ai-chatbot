@@ -1,6 +1,4 @@
-// ======================================================
-// File: Artifact.tsx
-// ======================================================
+'use client';
 
 import type {
   Attachment,
@@ -31,78 +29,39 @@ import { ArtifactMessages } from './artifact-messages';
 import { useSidebar } from './ui/sidebar';
 import { useArtifact } from '@/hooks/use-artifact';
 import { imageArtifact } from '@/artifacts/image/client';
-import { codeArtifact } from '@/artifacts/code/client';
+import { codeArtifact } from '@/artifacts/code/index';
 import { sheetArtifact } from '@/artifacts/sheet/client';
 import { textArtifact } from '@/artifacts/text/client';
 import equal from 'fast-deep-equal';
-import { Network, Layout } from 'lucide-react';
-import { ActFlowVisualizer, isActContent } from '@/components/ActFlowVisualizer';
 
-// ------------------------------------------------------------------
-// Define the ACT artifact for workflow configuration
-// ------------------------------------------------------------------
-const actArtifact = {
-  kind: 'act' as const,
-  title: 'ACT System Configuration',
-  initialize: async ({ documentId, setMetadata, setArtifact }: {
-    documentId: string;
-    setMetadata: (metadata: Record<string, any>) => void;
-    setArtifact: Dispatch<SetStateAction<any>>;
-  }) => {
-    // Set some metadata for ACT files
-    setMetadata({
-      language: 'typescript',
-      mode: 'UC',
-    });
-    // Generate the ACT file content using the system helper
-    const act = ActArtifactSystem.getActArtifact();
-    // Set the artifact's content to the generated ACT file content
-    setArtifact((prev: any) => ({
-      ...prev,
-      content: act.content,
-    }));
-  },
-  content: ({ content }: { content: string }) => {
-    // Render the ACT file content as preformatted text
-    return (
-      <div className="w-full h-full p-4">
-        <pre className="whitespace-pre-wrap">{content}</pre>
-      </div>
-    );
-  },
-};
-
-// ------------------------------------------------------------------
-// Define artifact definitions (including ACT)
-// ------------------------------------------------------------------
 export const artifactDefinitions = [
   textArtifact,
   codeArtifact,
   imageArtifact,
   sheetArtifact,
-  actArtifact, // Add ACT artifact to definitions
 ];
 
 export type ArtifactKind = (typeof artifactDefinitions)[number]['kind'];
 
 export interface UIArtifact {
+  id: string;
   title: string;
   documentId: string;
   kind: ArtifactKind;
   content: string;
   isVisible: boolean;
-  status: 'streaming' | 'idle';
+  status: 'streaming' | 'idle' | 'updating' | 'error';
   boundingBox: {
     top: number;
     left: number;
     width: number;
     height: number;
   };
+  lastContent?: string;
+  currentContent?: string;
+  lastUpdateTime?: number;
 }
 
-// ------------------------------------------------------------------
-// Main Artifact Component
-// ------------------------------------------------------------------
 function PureArtifact({
   chatId,
   input,
@@ -141,76 +100,69 @@ function PureArtifact({
   isReadonly: boolean;
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
-  const [isFlowView, setIsFlowView] = useState(false);
-  const [showFlowOption, setShowFlowOption] = useState(false);
 
   const {
     data: documents,
     isLoading: isDocumentsFetching,
     mutate: mutateDocuments,
   } = useSWR<Array<Document>>(
-    artifact.documentId !== 'init' && artifact.status !== 'streaming'
+    artifact.documentId !== 'init'
       ? `/api/document?id=${artifact.documentId}`
       : null,
     fetcher,
+    {
+      revalidateOnFocus: true,
+      refreshInterval: 1000,
+      refreshWhenHidden: false
+    }
   );
 
   const [mode, setMode] = useState<'edit' | 'diff'>('edit');
   const [document, setDocument] = useState<Document | null>(null);
   const [currentVersionIndex, setCurrentVersionIndex] = useState(-1);
-
   const { open: isSidebarOpen } = useSidebar();
+  const [isContentDirty, setIsContentDirty] = useState(false);
+  const [isToolbarVisible, setIsToolbarVisible] = useState(false);
+  const { width: windowWidth, height: windowHeight } = useWindowSize();
+  const isMobile = windowWidth ? windowWidth < 768 : false;
 
-  // Check if content is ACT format whenever it changes
-  useEffect(() => {
-    if (artifact?.content) {
-      const actContentDetected = isActContent(artifact.content);
-      setShowFlowOption(actContentDetected);
-      
-      // Set flow view as default for ACT content when opening artifact
-      if (actContentDetected && artifact.status !== 'streaming') {
-        setIsFlowView(true);
-      } else if (!actContentDetected && isFlowView) {
-        // Switch back to code view for non-ACT content
-        setIsFlowView(false);
-      }
-    } else {
-      setShowFlowOption(false);
-    }
-  }, [artifact?.content, artifact?.status]);
-
+  // Handle setting initial document and version
   useEffect(() => {
     if (documents && documents.length > 0) {
       const mostRecentDocument = documents.at(-1);
       if (mostRecentDocument) {
         setDocument(mostRecentDocument);
         setCurrentVersionIndex(documents.length - 1);
-        setArtifact((currentArtifact: any) => ({
+        setArtifact((currentArtifact) => ({
           ...currentArtifact,
           content: mostRecentDocument.content ?? '',
+          currentContent: mostRecentDocument.content ?? '',
+          lastUpdateTime: new Date(mostRecentDocument.createdAt).getTime()
         }));
-        
-        // Check if content is ACT format
-        if (mostRecentDocument.content) {
-          setShowFlowOption(isActContent(mostRecentDocument.content));
-        }
       }
     }
   }, [documents, setArtifact]);
+
+  // Sync content changes between views
+  useEffect(() => {
+    if (artifact.lastContent && artifact.lastContent !== artifact.content) {
+      setArtifact(current => ({
+        ...current,
+        content: artifact.lastContent,
+        currentContent: artifact.lastContent
+      }));
+    }
+  }, [artifact.lastContent, artifact.content, setArtifact]);
 
   useEffect(() => {
     mutateDocuments();
   }, [artifact.status, mutateDocuments]);
 
   const { mutate } = useSWRConfig();
-  const [isContentDirty, setIsContentDirty] = useState(false);
 
   const handleContentChange = useCallback(
     (updatedContent: string) => {
       if (!artifact) return;
-
-      // Check if content is ACT format
-      setShowFlowOption(isActContent(updatedContent));
 
       mutate<Array<Document>>(
         `/api/document?id=${artifact.documentId}`,
@@ -221,29 +173,56 @@ function PureArtifact({
             setIsContentDirty(false);
             return currentDocuments;
           }
+
           if (currentDocument.content !== updatedContent) {
-            await fetch(`/api/document?id=${artifact.documentId}`, {
-              method: 'POST',
-              body: JSON.stringify({
-                title: artifact.title,
+            try {
+              setArtifact(current => ({
+                ...current,
+                status: 'updating'
+              }));
+
+              await fetch(`/api/document?id=${artifact.documentId}`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  title: artifact.title,
+                  content: updatedContent,
+                  kind: artifact.kind,
+                }),
+              });
+
+              setIsContentDirty(false);
+              
+              const newDocument = {
+                ...currentDocument,
                 content: updatedContent,
-                kind: artifact.kind,
-              }),
-            });
-            setIsContentDirty(false);
-            const newDocument = {
-              ...currentDocument,
-              content: updatedContent,
-              createdAt: new Date(),
-            };
-            return [...currentDocuments, newDocument];
+                createdAt: new Date().toISOString()
+              };
+
+              setArtifact(current => ({
+                ...current,
+                content: updatedContent,
+                currentContent: updatedContent,
+                lastContent: updatedContent,
+                lastUpdateTime: Date.now(),
+                status: 'idle'
+              }));
+
+              return [...currentDocuments, newDocument];
+            } catch (error) {
+              console.error('Error saving content:', error);
+              setArtifact(current => ({
+                ...current,
+                status: 'error'
+              }));
+              return currentDocuments;
+            }
           }
           return currentDocuments;
         },
         { revalidate: false },
       );
     },
-    [artifact, mutate],
+    [artifact, mutate, setArtifact],
   );
 
   const debouncedHandleContentChange = useDebounceCallback(handleContentChange, 2000);
@@ -288,14 +267,10 @@ function PureArtifact({
     }
   };
 
-  const [isToolbarVisible, setIsToolbarVisible] = useState(false);
   const isCurrentVersion =
     documents && documents.length > 0
       ? currentVersionIndex === documents.length - 1
       : true;
-
-  const { width: windowWidth, height: windowHeight } = useWindowSize();
-  const isMobile = windowWidth ? windowWidth < 768 : false;
 
   const artifactDefinition = artifactDefinitions.find(
     (definition) => definition.kind === artifact.kind,
@@ -305,7 +280,6 @@ function PureArtifact({
     throw new Error('Artifact definition not found!');
   }
 
-  // IMPORTANT: Pass setArtifact along with setMetadata to initialization.
   useEffect(() => {
     if (artifact.documentId !== 'init') {
       if (artifactDefinition.initialize) {
@@ -344,7 +318,7 @@ function PureArtifact({
 
           {!isMobile && (
             <motion.div
-              className="relative w-[400px] bg-muted dark:bg-background h-dvh shrink-0"
+              className="relative w-[400px] bg-muted dark:bg-background h-dvh shrink-0 border-r border-zinc-800"
               initial={{ opacity: 0, x: 10, scale: 1 }}
               animate={{
                 opacity: 1,
@@ -357,7 +331,7 @@ function PureArtifact({
               <AnimatePresence>
                 {!isCurrentVersion && (
                   <motion.div
-                    className="left-0 absolute h-dvh w-[400px] top-0 bg-zinc-900/50 z-50"
+                    className="left-0 absolute h-dvh w-[400px] top-0 bg-zinc-700/50 z-50"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
@@ -377,7 +351,7 @@ function PureArtifact({
                   artifactStatus={artifact.status}
                 />
 
-                <form className="flex flex-row gap-2 relative items-end w-full px-2 pb-2">
+                <form className="flex flex-row gap-2 relative items-end w-full px-2 pb-4">
                   <MultimodalInput
                     chatId={chatId}
                     input={input}
@@ -398,46 +372,46 @@ function PureArtifact({
           )}
 
           <motion.div
-            className="fixed dark:bg-muted bg-background-blacl h-dvh flex flex-col overflow-y-scroll md:border-l dark:border-zinc-700 border-zinc-200"
+            className="fixed dark:bg-muted bg-background h-dvh flex flex-col overflow-y-scroll border-zinc-200"
             initial={
               isMobile
                 ? {
-                    opacity: 1,
-                    x: artifact.boundingBox.left,
-                    y: artifact.boundingBox.top,
-                    height: artifact.boundingBox.height,
-                    width: artifact.boundingBox.width,
-                    borderRadius: 50,
-                  }
+                  opacity: 1,
+                  x: artifact.boundingBox.left,
+                  y: artifact.boundingBox.top,
+                  height: artifact.boundingBox.height,
+                  width: artifact.boundingBox.width,
+                  borderRadius: 50,
+                }
                 : {
-                    opacity: 1,
-                    x: artifact.boundingBox.left,
-                    y: artifact.boundingBox.top,
-                    height: artifact.boundingBox.height,
-                    width: artifact.boundingBox.width,
-                    borderRadius: 50,
-                  }
+                  opacity: 1,
+                  x: artifact.boundingBox.left,
+                  y: artifact.boundingBox.top,
+                  height: artifact.boundingBox.height,
+                  width: artifact.boundingBox.width,
+                  borderRadius: 50,
+                }
             }
             animate={
               isMobile
                 ? {
-                    opacity: 1,
-                    x: 0,
-                    y: 0,
-                    height: windowHeight,
-                    width: windowWidth,
-                    borderRadius: 0,
-                    transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
-                  }
+                  opacity: 1,
+                  x: 0,
+                  y: 0,
+                  height: windowHeight,
+                  width: windowWidth,
+                  borderRadius: 0,
+                  transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
+                }
                 : {
-                    opacity: 1,
-                    x: 400,
-                    y: 0,
-                    height: windowHeight,
-                    width: windowWidth - 400,
-                    borderRadius: 0,
-                    transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
-                  }
+                  opacity: 1,
+                  x: 400,
+                  y: 0,
+                  height: windowHeight,
+                  width: windowWidth - 400,
+                  borderRadius: 0,
+                  transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
+                }
             }
             exit={{
               opacity: 0,
@@ -448,16 +422,24 @@ function PureArtifact({
             <div className="p-2 flex flex-row justify-between items-start">
               <div className="flex flex-row gap-2 items-start">
                 <ArtifactCloseButton />
-
                 <div className="flex flex-col">
-                  <div className="font-medium">{artifact.title}</div>
                   {isContentDirty ? (
                     <div className="text-sm text-muted-foreground">Saving changes...</div>
-                  ) : document ? (
+                  ) : document?.createdAt ? (
                     <div className="text-sm text-muted-foreground">
-                      {`Updated ${formatDistance(new Date(document.createdAt), new Date(), {
-                        addSuffix: true,
-                      })}`}
+                      {(() => {
+                        try {
+                          const updateDate = new Date(document.createdAt);
+                          if (isNaN(updateDate.getTime())) {
+                            return 'Recently updated';
+                          }
+                          return `Updated ${formatDistance(updateDate, new Date(), {
+                            addSuffix: true,
+                          })}`;
+                        } catch (error) {
+                          return 'Recently updated';
+                        }
+                      })()}
                     </div>
                   ) : (
                     <div className="w-32 h-3 mt-2 bg-muted-foreground/20 rounded-md animate-pulse" />
@@ -466,27 +448,6 @@ function PureArtifact({
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Only show flow view button for ACT content */}
-{/* Flow/Code view toggle button */}
-{showFlowOption && (
-  <button
-    onClick={() => setIsFlowView(!isFlowView)}
-    className="p-2 rounded-lg hover:bg-muted transition-colors flex items-center gap-1"
-    title={isFlowView ? 'Switch to Code View' : 'Switch to Flow View'}
-  >
-    {isFlowView ? (
-      <>
-        <Layout size={18} />
-        <span className="text-sm">Code</span>
-      </>
-    ) : (
-      <>
-        <Network size={18} />
-        <span className="text-sm">Flow</span>
-      </>
-    )}
-  </button>
-)}
                 <ArtifactActions
                   artifact={artifact}
                   currentVersionIndex={currentVersionIndex}
@@ -500,41 +461,26 @@ function PureArtifact({
             </div>
 
             <div className="dark:bg-muted bg-background h-full overflow-y-scroll !max-w-full items-center">
-            {isFlowView && showFlowOption ? (
-  <div style={{ width: '100%', height: 'calc(105vh - 100px)' }}>
-    <ActFlowVisualizer 
-      content={
-        isCurrentVersion
-          ? artifact.content
-          : getDocumentContentById(currentVersionIndex)
-      }
-      isStreaming={artifact.status === 'streaming'}
-      metadata={metadata}
-      setMetadata={setMetadata}
-    />
-  </div>
-) : (
-  <artifactDefinition.content
-    title={artifact.title}
-    content={
-      isCurrentVersion
-        ? artifact.content
-        : getDocumentContentById(currentVersionIndex)
-    }
-    mode={mode}
-    status={artifact.status}
-    currentVersionIndex={currentVersionIndex}
-    suggestions={[]}
-    onSaveContent={saveContent}
-    isInline={false}
-    isCurrentVersion={isCurrentVersion}
-    getDocumentContentById={getDocumentContentById}
-    isLoading={isDocumentsFetching && !artifact.content}
-    metadata={metadata}
-    setMetadata={setMetadata}
-    document={document}
-  />
-)}
+              <artifactDefinition.content
+                title={artifact.title}
+                content={
+                  isCurrentVersion
+                    ? artifact.currentContent || artifact.content
+                    : getDocumentContentById(currentVersionIndex)
+                }
+                mode={mode}
+                status={artifact.status}
+                currentVersionIndex={currentVersionIndex}
+                suggestions={[]}
+                onSaveContent={saveContent}
+                isInline={false}
+                isCurrentVersion={isCurrentVersion}
+                getDocumentContentById={getDocumentContentById}
+                isLoading={isDocumentsFetching && !artifact.content}
+                metadata={metadata}
+                setMetadata={setMetadata}
+                document={document}
+              />
 
               <AnimatePresence>
                 {isCurrentVersion && (
@@ -571,7 +517,7 @@ export const Artifact = memo(PureArtifact, (prevProps, nextProps) => {
   if (prevProps.isLoading !== nextProps.isLoading) return false;
   if (!equal(prevProps.votes, nextProps.votes)) return false;
   if (prevProps.input !== nextProps.input) return false;
-  if (!equal(prevProps.messages, nextProps.messages.length)) return false;
+  if (!equal(prevProps.messages, nextProps.messages)) return false;
   return true;
 });
 

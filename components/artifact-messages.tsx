@@ -36,28 +36,25 @@ function PureArtifactMessages({
   return (
     <div
       ref={messagesContainerRef}
-      className="flex flex-col gap-4 h-full items-center overflow-y-scroll px-4 pt-20"
+      className="flex flex-col gap-3 h-full items-center overflow-y-scroll pr-4  scale-[0.91] origin-center "
     >
       {messages.map((message, index) => (
-        <PreviewMessage
-          chatId={chatId}
-          key={message.id}
-          message={message}
-          isLoading={isLoading && index === messages.length - 1}
-          vote={
-            votes
-              ? votes.find((vote) => vote.messageId === message.id)
-              : undefined
-          }
-          setMessages={setMessages}
-          reload={reload}
-          isReadonly={isReadonly}
-        />
+        <div key={message.id} className="w-full transform-gpu">
+          <PreviewMessage
+            chatId={chatId}
+            message={message}
+            isLoading={isLoading && index === messages.length - 1}
+            vote={votes?.find((vote) => vote.messageId === message.id)}
+            setMessages={setMessages}
+            reload={reload}
+            isReadonly={isReadonly}
+          />
+        </div>
       ))}
 
       <div
         ref={messagesEndRef}
-        className="shrink-0 min-w-[24px] min-h-[24px]"
+        className="min-w-[16px] min-h-[16px]"
       />
     </div>
   );
@@ -70,8 +67,9 @@ function areEqual(
   if (
     prevProps.artifactStatus === 'streaming' &&
     nextProps.artifactStatus === 'streaming'
-  )
+  ) {
     return true;
+  }
 
   if (prevProps.isLoading !== nextProps.isLoading) return false;
   if (prevProps.isLoading && nextProps.isLoading) return false;

@@ -1,22 +1,31 @@
-version: '3.8'
-
 services:
-  workflow-service:
-    build: .
-    container_name: workflow-service
+  workflow-manager:
+    build: 
+      context: .
+      dockerfile: Dockerfile.manager
+    container_name: workflow-manager
     restart: unless-stopped
     ports:
       - "5001:5001"
     environment:
       - PORT=5001
-      - EXECUTION_TIMEOUT=300
       - LOG_LEVEL=INFO
-      - FLASK_ENV=production
+      - WORKER_IMAGE=workflow-worker:latest
     volumes:
-      - ./tmp:/app/tmp
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}/tmp:/tmp
+    networks:
+      - workflow-net
+
+  workflow-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: workflow-worker:latest
+    networks:
+      - workflow-net
+
+networks:
+  workflow-net:
+    name: workflow-net
+    driver: bridge

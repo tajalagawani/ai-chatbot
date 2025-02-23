@@ -7,7 +7,7 @@ import { createDocumentHandler } from '@/lib/artifacts/server';
 const ACT_STRUCTURE_PROMPT = `
 WORKFLOW ACT STRUCTURE
 ====================
-1. Include at least 5 to 10 nodes or more IF needed to represent a comprehensive workflow based on the description.
+1. Include at least 10 to 15 nodes or more IF needed to represent a comprehensive workflow based on the description.
 2. Use various node shapes to represent different types of steps (e.g., rectangles for processes, diamonds for decisions).
 3. Include detailed labels for each node and edge.
 4. Represent complex logic with multiple paths and decision points.
@@ -363,8 +363,8 @@ mode = "UC"
 [node:end]
 type = "end"
 label = "End Process"
-position_x = 700
-position_y = 100
+position_x = 1200
+position_y = 600
 operation = "end"
 app_name = "System"
 operation_name = "endWorkflow"
@@ -374,8 +374,8 @@ mode = "UC"
 [node:error_handler]
 type = "error"
 label = "Error Handler"
-position_x = 400
-position_y = 200
+position_x = 800
+position_y =400
 operation = "error"
 app_name = "System"
 operation_name = "handleError"

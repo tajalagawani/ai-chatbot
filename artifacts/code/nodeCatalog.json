@@ -1,0 +1,63 @@
+{
+    "nodes": [
+      {
+        "node_id": "start",
+        "type": "start",
+        "label": "Start Process",
+        "parameters": {}
+      },
+      {
+        "node_id": "delay",
+        "type": "process",
+        "label": "Delay Node",
+        "parameters": {
+          "delay_time": {
+            "type": "number",
+            "required": true,
+            "description": "Time in seconds to delay execution"
+          },
+          "input": {
+            "type": "object",
+            "required": false,
+            "description": "Input from previous node"
+          }
+        }
+      },
+      {
+        "node_id": "end",
+        "type": "end",
+        "label": "End Process",
+        "parameters": {}
+      },
+      {
+        "node_id": "error_handler",
+        "type": "error",
+        "label": "Error Handler",
+        "parameters": {
+          "retryCount": {
+            "type": "number",
+            "required": false,
+            "description": "Number of times to retry"
+          },
+          "logLevel": {
+            "type": "string",
+            "required": false,
+            "description": "Logging level"
+          }
+        }
+      },
+      {
+        "node_id": "decision",
+        "type": "decision",
+        "label": "Decision Node",
+        "parameters": {
+          "condition": {
+            "type": "string",
+            "required": true,
+            "description": "Conditional expression to evaluate"
+          }
+        }
+      }
+    ]
+  }
+  

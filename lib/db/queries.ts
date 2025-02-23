@@ -345,3 +345,37 @@ export async function updateChatVisiblityById({
     throw error;
   }
 }
+export async function updateDocumentInPlace({
+  id,
+  content,
+  userId,
+}: {
+  id: string;
+  content: string;
+  userId: string;
+}) {
+  try {
+    // Get the latest document version
+    const documents = await getDocumentsById({ id });
+    if (!documents.length) {
+      throw new Error("Document not found");
+    }
+    
+    // Get the most recent document
+    const latestDocument = documents[documents.length - 1];
+    
+    // Update only the content of the latest document
+    return await db
+      .update(document)
+      .set({ content })
+      .where(
+        and(
+          eq(document.id, id),
+          eq(document.createdAt, latestDocument.createdAt)
+        )
+      );
+  } catch (error) {
+    console.error('Failed to update document in place');
+    throw error;
+  }
+}

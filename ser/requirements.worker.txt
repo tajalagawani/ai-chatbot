@@ -1,0 +1,13 @@
+flask>=2.3.3
+flask-cors>=4.0.0
+requests>=2.32.3
+python-dotenv>=1.0.1
+gunicorn>=21.2.0
+pyyaml>=6.0.2
+jinja2>=3.1.2
+act-workflow>=4.8.243
+openai>=1.51.2
+slack-sdk>=3.33.1
+dataclasses-json>=0.6.7
+jiter>=0.6.1
+psutil>=5.8.0

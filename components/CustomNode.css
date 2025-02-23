@@ -1,0 +1,45 @@
+/* components/CustomNode.css */
+.custom-node-wrapper {
+  position: relative;
+}
+
+.custom-node {
+  width: 160px;
+  height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  padding: 8px;
+  background-color: #fff;
+  border: 1px solid #ddd;
+  cursor: pointer;
+  position: relative;
+}
+
+.custom-node.selected {
+  box-shadow: 0 0 0 4px rgba(0, 128, 0, 0.3);
+}
+
+.custom-node-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.custom-node-icon {
+  margin-bottom: 8px;
+}
+
+.custom-node-label {
+  font-size: 14px;
+  text-align: center;
+  font-weight: bold;
+}
+
+.custom-handle {
+  width: 10px;
+  height: 10px;
+  background: #555;
+  border: none;
+}

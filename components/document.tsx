@@ -58,6 +58,7 @@ function PureDocumentToolResult({
         };
 
         setArtifact({
+          id: result.id,
           documentId: result.id,
           kind: result.kind,
           content: '',

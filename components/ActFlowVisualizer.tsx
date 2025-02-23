@@ -11,11 +11,9 @@ import ReactFlow, {
   NodeChange,
   EdgeChange,
   Viewport,
-  XYPosition,
-  Position
+  XYPosition
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { useDebounceCallback } from 'usehooks-ts';
 import BaseNode from './BaseNode';
 import { Box } from 'lucide-react';
 import CustomEdge from './CustomEdge';
@@ -26,7 +24,6 @@ interface ActFlowVisualizerProps {
   metadata?: any;
   setMetadata?: (metadata: any) => void;
   onContentChange?: (content: string) => void;
-  saveContent?: (content: string, debounce: boolean) => void;
 }
 
 function parseIncrementalContent(content: string, previousNodes = {}) {
@@ -169,8 +166,7 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
   isStreaming,
   metadata,
   setMetadata,
-  onContentChange,
-  saveContent
+  onContentChange
 }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -185,21 +181,11 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     zoom: 2
   };
 
-  const handleContentUpdate = useCallback((updatedNodes: Node[], updatedEdges: Edge[]) => {
-    const updatedContent = getActContentFromFlow(updatedNodes, updatedEdges);
-    if (saveContent) {
-      saveContent(updatedContent, true);
-    } else if (onContentChange) {
-      onContentChange(updatedContent);
-    }
-  }, [onContentChange, saveContent]);
-
-  const debouncedHandleContentUpdate = useDebounceCallback(handleContentUpdate, 2000);
-
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
     isManualChangeRef.current = true;
     onNodesChange(changes);
-  
+
+    // Process only completed position changes
     const positionChanges = changes.filter(
       (change): change is NodeChange & { position: XYPosition } => 
         change.type === 'position' && 
@@ -208,9 +194,8 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
         typeof change.position.x === 'number' &&
         typeof change.position.y === 'number'
     );
-  
+
     if (positionChanges.length > 0) {
-      // Update nodes with new positions
       const updatedNodes = nodes.map(node => {
         const positionChange = positionChanges.find(change => change.id === node.id);
         if (positionChange?.position) {
@@ -225,37 +210,29 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
         }
         return node;
       });
-  
-      // Generate new content from updated nodes
-      const updatedContent = getActContentFromFlow(updatedNodes, edges);
-  
-      // Save using the provided saveContent function
-      if (saveContent) {
-        console.log('Saving flow content:', updatedContent);
-        saveContent(updatedContent, true);
+
+      if (onContentChange) {
+        const updatedContent = getActContentFromFlow(updatedNodes, edges);
+        onContentChange(updatedContent);
       }
     }
-  }, [nodes, edges, onNodesChange, saveContent]);
-  
-  // Handle edge changes similarly
+  }, [nodes, edges, onNodesChange, onContentChange]);
+
   const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
     onEdgesChange(changes);
     
     const hasRemovals = changes.some(change => change.type === 'remove');
-    if (hasRemovals) {
+    if (onContentChange && hasRemovals) {
       const updatedEdges = edges.filter(edge => 
         !changes.some(change => 
           change.type === 'remove' && change.id === edge.id
         )
       );
       const updatedContent = getActContentFromFlow(nodes, updatedEdges);
-      
-      if (saveContent) {
-        console.log('Saving flow content after edge change:', updatedContent);
-        saveContent(updatedContent, false); // Don't debounce edge removals
-      }
+      onContentChange(updatedContent);
     }
-  }, [nodes, edges, onEdgesChange, saveContent]);
+  }, [nodes, edges, onEdgesChange, onContentChange]);
+
   useEffect(() => {
     if (!content || content === previousContentRef.current) return;
     previousContentRef.current = content;
@@ -306,15 +283,8 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       }
     } catch (error) {
       console.error('Failed to parse ACT content:', error);
-      if (setMetadata) {
-        setMetadata(prev => ({
-          ...prev,
-          status: 'error',
-          lastError: error instanceof Error ? error.message : 'Failed to parse flow content'
-        }));
-      }
     }
-  }, [content, setNodes, setEdges, reactFlowInstance, setMetadata]);
+  }, [content, setNodes, setEdges, reactFlowInstance]);
 
   return (
     <div className="w-full h-full">
@@ -331,7 +301,7 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
         defaultViewport={defaultViewport}
         fitView
         fitViewOptions={{
-          padding: 1,
+          padding:1,
           minZoom: 0.5,
           maxZoom: 2
         }}

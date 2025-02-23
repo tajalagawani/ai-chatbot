@@ -10,7 +10,7 @@ import { ActFlowVisualizer, isActContent } from '@/components/ActFlowVisualizer'
 import { generateUUID } from '@/lib/utils';
 import { dockerService } from '@/lib/services/docker';
 
-// Import components
+// Import our extracted components
 import CodeEditor from './CodeEditor';
 import DockerStatus from './DockerStatus';
 import { Alert, AlertTitle, AlertDescription } from './BasicComponents';
@@ -43,11 +43,8 @@ const codeArtifact = {
         executionId: null,
         executionStatus: null,
         executionResult: null,
-        showFlowOption: true,
+        showFlowOption: true,  // Set this to true by default
         isFlowFullscreen: false,
-        lastContent: null,
-        currentContent: null,
-        lastUpdateTime: null,
         outputs: [{
           id: generateUUID(),
           contents: [{
@@ -57,8 +54,7 @@ const codeArtifact = {
           status: isDockerHealthy ? 'completed' : 'failed'
         }],
         dockerStatus: isDockerHealthy ? 'ready' : 'unavailable',
-        lastError: null,
-        status: 'idle'
+        lastError: null
       };
   
       console.log('Setting initial metadata:', metadata);
@@ -82,11 +78,8 @@ const codeArtifact = {
         executionId: null,
         executionStatus: null,
         executionResult: null,
-        showFlowOption: true,
+        showFlowOption: true,  // Set this to true by default
         isFlowFullscreen: false,
-        lastContent: null,
-        currentContent: null,
-        lastUpdateTime: null,
         outputs: [{
           id: generateUUID(),
           contents: [{
@@ -96,8 +89,7 @@ const codeArtifact = {
           status: 'failed'
         }],
         dockerStatus: 'unavailable',
-        lastError: errorMessage,
-        status: 'error'
+        lastError: errorMessage
       });
   
       toast.error(`Docker initialization failed: ${errorMessage}`);
@@ -108,10 +100,14 @@ const codeArtifact = {
     const [isExecuting, setIsExecuting] = useState(false);
     const [initialViewSet, setInitialViewSet] = useState(false);
     const { width: windowWidth, height: windowHeight } = useWindowSize();
+
+    // Use a separate controlled view mode that doesn't rely on metadata
     const [viewMode, setViewMode] = useState(metadata?.viewMode || 'code');
-    const metadataViewModeRef = useRef(metadata?.viewMode || 'code');
-    const [isContentDirty, setIsContentDirty] = useState(false);
     
+    // Use a ref to track the latest metadata viewMode
+    const metadataViewModeRef = useRef(metadata?.viewMode || 'code');
+    
+    // Update the ref whenever metadata.viewMode changes
     useEffect(() => {
       if (metadata?.viewMode) {
         metadataViewModeRef.current = metadata.viewMode;
@@ -119,49 +115,39 @@ const codeArtifact = {
       }
     }, [metadata?.viewMode]);
 
-    const saveContent = useCallback(async (updatedContent, debounce) => {
-        console.log('saveContent called with:', { updatedContent, debounce });
-        if (!updatedContent) return;
-        
-        try {
-          setIsContentDirty(true);
-          setMetadata(prev => ({
-            ...prev,
-            lastContent: updatedContent,
-            status: 'updating'
-          }));
-      
-          console.log('Calling onSaveContent with:', updatedContent);
-          await onSaveContent(updatedContent);
-      
-          setMetadata(prev => ({
-            ...prev,
-            status: 'idle',
-            lastUpdateTime: Date.now(),
-            currentContent: updatedContent
-          }));
-          setIsContentDirty(false);
-      
-        } catch (error) {
-          console.error('Error saving content:', error);
-          // ... error handling
-        }
-      }, [onSaveContent, setMetadata]);
+    // Handle updates from flow to code
+    const handleFlowContentChange = useCallback((updatedContent) => {
+      if (!updatedContent) return;
+      onSaveContent(updatedContent, false);
+    }, [onSaveContent]);
+
+    // Define a custom toggle handler that uses the ref for current state
     const handleToggleView = useCallback(() => {
+      // Get the current view mode from our ref
       const currentViewMode = metadataViewModeRef.current;
+      
+      // Calculate the new view mode
       const newViewMode = currentViewMode === 'flow' ? 'code' : 'flow';
       
       console.log(`Toggle from ${currentViewMode} to ${newViewMode}`);
       
+      // Update our local state immediately
       setViewMode(newViewMode);
+      
+      // Update the ref
       metadataViewModeRef.current = newViewMode;
       
-      setMetadata(prev => ({
-        ...prev,
-        viewMode: newViewMode
-      }));
+      // Update the metadata
+      setMetadata(prev => {
+        console.log('Previous metadata:', prev);
+        return {
+          ...prev,
+          viewMode: newViewMode
+        };
+      });
     }, [setMetadata]);
 
+    // Monitor execution status
     useEffect(() => {
       if (!metadata?.executionId || !metadata?.port) return;
 
@@ -247,6 +233,7 @@ const codeArtifact = {
       };
     }, [metadata?.executionId, metadata?.port, setMetadata]);
 
+    // Handle fullscreen escape key
     useEffect(() => {
       const handleKeyDown = (event) => {
         if (event.key === 'Escape' && metadata?.isFlowFullscreen) {
@@ -261,12 +248,14 @@ const codeArtifact = {
       return () => window.removeEventListener('keydown', handleKeyDown);
     }, [metadata?.isFlowFullscreen, setMetadata]);
 
+    // Add direct console log to check metadata state at runtime
     useEffect(() => {
       console.log('Current metadata state:', metadata);
       console.log('Current view mode state:', viewMode);
       console.log('Ref view mode:', metadataViewModeRef.current);
     }, [metadata, viewMode]);
 
+    // Force the metadata to have showFlowOption set to true
     useEffect(() => {
       if (metadata && metadata.showFlowOption !== true) {
         console.log('Setting showFlowOption to true');
@@ -277,6 +266,7 @@ const codeArtifact = {
       }
     }, [metadata, setMetadata]);
 
+    // Parse content and check if it's ACT content but preserve showFlowOption
     useEffect(() => {
       if (!content) return;
     
@@ -285,18 +275,20 @@ const codeArtifact = {
         console.log("ACT content detected:", actContentDetected);
         
         setMetadata(prev => {
+          // Calculate the new view mode, ensuring we don't override a manual setting
           let newViewMode = prev.viewMode;
           if (!initialViewSet && actContentDetected) {
             newViewMode = 'flow';
+            // Update our local state and ref too
             setViewMode('flow');
             metadataViewModeRef.current = 'flow';
           }
           
           return {
             ...prev,
+            // Keep showFlowOption true even if not ACT content
             showFlowOption: true,
-            viewMode: newViewMode,
-            currentContent: content
+            viewMode: newViewMode
           };
         });
         
@@ -308,36 +300,35 @@ const codeArtifact = {
         setMetadata(prev => ({
           ...prev,
           flowData: null,
+          // Keep isValid true and showFlowOption true even with errors
           isValid: true,
           showFlowOption: true
         }));
       }
     }, [content, setMetadata, initialViewSet]);
 
+    // Add direct toggle support for custom actions
     useEffect(() => {
-      if (metadata?.lastContent && metadata.lastContent !== content) {
-        setMetadata(prev => ({
-          ...prev,
-          currentContent: metadata.lastContent
-        }));
-      }
-    }, [metadata?.lastContent, content, setMetadata]);
-
-    useEffect(() => {
+      // Find the toggle action and make it use our custom handler
       const toggleAction = actions.find(
         action => action.label === 'Toggle View' || 
                  (action.description && action.description.includes('Switch between'))
       );
       
       if (toggleAction) {
-        toggleAction.onClick = handleToggleView;
+        const originalOnClick = toggleAction.onClick;
+        
+        // Replace with our custom handler
+        toggleAction.onClick = () => {
+          handleToggleView();
+        };
       }
     }, [handleToggleView]);
 
+    // DEBUG ELEMENT - render view mode info
     const debugInfo = (
       <div className="absolute top-2 left-2 z-50 bg-black text-white p-2 text-xs rounded">
-        <div>View Mode: {viewMode}</div>
-        <div>Status: {metadata?.status}</div>
+   
         <Button 
           onClick={handleToggleView} 
           size="sm" 
@@ -349,95 +340,94 @@ const codeArtifact = {
     );
 
     return (
-        <div className="relative w-full h-full">
-          {debugInfo}
-          
-          <div className="absolute top-2 right-2 z-10 flex gap-2">
-            <DockerStatus 
-              status={metadata?.dockerStatus === 'unavailable' 
-                ? 'unavailable' 
-                : metadata?.containerStatus || 'stopped'
-              } 
-              containerId={metadata?.containerId}
-              port={metadata?.port}
+      <div className="relative w-full h-full">
+        {/* Debug state display - uncomment if needed */}
+        {debugInfo}
+        
+        <div className="absolute top-2 right-2 z-10 flex gap-2">
+          <DockerStatus 
+            status={metadata?.dockerStatus === 'unavailable' 
+              ? 'unavailable' 
+              : metadata?.containerStatus || 'stopped'
+            } 
+            containerId={metadata?.containerId}
+            port={metadata?.port}
+          />
+        </div>
+
+        {viewMode === 'flow' ? (
+          <div style={{ 
+            width: '100%', 
+            height: metadata?.isFlowFullscreen ? '100vh' : 'calc(100vh - 80px)',
+            position: metadata?.isFlowFullscreen ? 'fixed' : 'relative',
+            top: metadata?.isFlowFullscreen ? '0' : 'auto',
+            left: metadata?.isFlowFullscreen ? '0' : 'auto',
+            zIndex: metadata?.isFlowFullscreen ? 50 : 'auto'
+          }}>
+            <ActFlowVisualizer 
+              content={content}
+              isStreaming={metadata?.status === 'streaming'}
+              metadata={metadata}
+              setMetadata={setMetadata}
+              onContentChange={handleFlowContentChange}
             />
           </div>
-      
-          {viewMode === 'flow' ? (
-            <div style={{ 
-              width: '100%', 
-              height: metadata?.isFlowFullscreen ? '100vh' : 'calc(100vh - 80px)',
-              position: metadata?.isFlowFullscreen ? 'fixed' : 'relative',
-              top: metadata?.isFlowFullscreen ? '0' : 'auto',
-              left: metadata?.isFlowFullscreen ? '0' : 'auto',
-              zIndex: metadata?.isFlowFullscreen ? 50 : 'auto'
-            }}>
-              <ActFlowVisualizer 
-                content={metadata?.currentContent || content}
-                isStreaming={metadata?.status === 'streaming'}
-                metadata={metadata}
-                setMetadata={setMetadata}
-                saveContent={saveContent}  
-              />
-            </div>
-          ) : (
-            <div className="w-full h-[calc(100vh-80px)]">
-              <CodeEditor 
-                content={metadata?.currentContent || content} 
-                onSaveContent={saveContent} 
-              />
-              {metadata?.isValid === false && (
-                <Alert variant="destructive" className="mt-4">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle>Invalid ACT Configuration</AlertTitle>
-                  <AlertDescription>
-                    Please check your workflow configuration for errors.
-                  </AlertDescription>
-                </Alert>
-              )}
-            </div>
-          )}
-      
-          {!metadata?.isFlowFullscreen && metadata?.outputs && metadata.outputs.length > 0 && (
-            <Console
-              consoleOutputs={metadata.outputs}
-              setConsoleOutputs={() => {
-                setMetadata(prev => ({
-                  ...prev,
-                  outputs: [],
-                }));
-              }}
-            />
-          )}
-        </div>
-      );
-    },
-  
-    actions,
-    toolbar,
-  
-    onStreamPart: ({ streamPart, setArtifact }) => {
-      if (streamPart.type === 'code-delta') {
-        setArtifact((draftArtifact) => ({
-          ...draftArtifact,
-          content: streamPart.content,
-          isVisible:
-            draftArtifact.status === 'streaming' &&
-            draftArtifact.content.length > 300 &&
-            draftArtifact.content.length < 310
-              ? true
-              : draftArtifact.isVisible,
-          status: 'streaming',
-        }));
-      }
-    },
-  
-    styles
-  };
-  
-  // Inject custom styles when in browser environment
-  if (typeof document !== 'undefined') {
-    injectStyles();
-  }
-  
-  export default codeArtifact;
+        ) : (
+          <div className="w-full h-[calc(100vh-80px)]">
+            <CodeEditor content={content} onSaveContent={onSaveContent} />
+            {metadata?.isValid === false && (
+              <Alert variant="destructive" className="mt-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Invalid ACT Configuration</AlertTitle>
+                <AlertDescription>
+                  Please check your workflow configuration for errors.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+        )}
+
+        {!metadata?.isFlowFullscreen && metadata?.outputs && metadata.outputs.length > 0 && (
+          <Console
+            consoleOutputs={metadata.outputs}
+            setConsoleOutputs={() => {
+              setMetadata({
+                ...metadata,
+                outputs: [],
+              });
+            }}
+          />
+        )}
+      </div>
+    );
+  },
+
+  // Keep original actions, our custom content component will handle the toggle
+  actions: actions,
+  toolbar: toolbar,
+
+  onStreamPart: ({ streamPart, setArtifact }) => {
+    if (streamPart.type === 'code-delta') {
+      setArtifact((draftArtifact) => ({
+        ...draftArtifact,
+        content: streamPart.content,
+        isVisible:
+          draftArtifact.status === 'streaming' &&
+          draftArtifact.content.length > 300 &&
+          draftArtifact.content.length < 310
+            ? true
+            : draftArtifact.isVisible,
+        status: 'streaming',
+      }));
+    }
+  },
+
+  styles: styles
+};
+
+// Inject custom styles when in browser environment
+if (typeof document !== 'undefined') {
+  injectStyles();
+}
+
+export default codeArtifact;

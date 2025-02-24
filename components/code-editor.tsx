@@ -17,7 +17,7 @@ type EditorProps = {
   suggestions: Array<Suggestion>;
 };
 
-function PureCodeEditor({ content, onSaveContent, status }: EditorProps) {
+function PureCodeEditor({ content, onSaveContent, status }: EditorProps) {7
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<EditorView | null>(null);
 

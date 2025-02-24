@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { useWindowSize } from 'usehooks-ts';
 import { Button } from '@/components/ui/button';
 import { Console } from '@/components/console';
-import { ActFlowVisualizer, isActContent } from '@/components/ActFlowVisualizer';
+// import { ActFlowVisualizer, isActContent } from '@/components/ActFlowVisualizer';
 import { generateUUID } from '@/lib/utils';
 import { dockerService } from '@/lib/services/docker';
 
@@ -364,13 +364,6 @@ const codeArtifact = {
             left: metadata?.isFlowFullscreen ? '0' : 'auto',
             zIndex: metadata?.isFlowFullscreen ? 50 : 'auto'
           }}>
-            <ActFlowVisualizer 
-              content={content}
-              isStreaming={metadata?.status === 'streaming'}
-              metadata={metadata}
-              setMetadata={setMetadata}
-              onContentChange={handleFlowContentChange}
-            />
           </div>
         ) : (
           <div className="w-full h-[calc(100vh-80px)]">

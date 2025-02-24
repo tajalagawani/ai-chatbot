@@ -1,11 +1,11 @@
-# File: ser/api_server.py
 from flask import Flask, request, jsonify
-from flask_cors import CORS
-import docker
+from act_executor import ActContentExecutor
 import logging
 import os
-from typing import Dict
-import json
+from flask_cors import CORS
+import asyncio
+from functools import wraps
+import threading
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -14,20 +14,41 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-# Initialize Docker client
-docker_client = docker.from_env()
+# Store event loop for each thread
+thread_local = threading.local()
 
-# Store container information
-containers: Dict[str, str] = {}
+def get_event_loop():
+    """Get or create event loop for current thread."""
+    if not hasattr(thread_local, 'loop'):
+        thread_local.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(thread_local.loop)
+    return thread_local.loop
+
+def async_route(f):
+    """Decorator to handle async routes."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        loop = get_event_loop()
+        try:
+            return loop.run_until_complete(f(*args, **kwargs))
+        except Exception as e:
+            logger.error(f"Error in async route: {str(e)}")
+            return jsonify({
+                'status': 'error',
+                'error': str(e)
+            }), 500
+    return wrapper
 
 @app.route('/health')
 def health_check():
     """Health check endpoint."""
     try:
-        docker_client.ping()
+        # Verify event loop is working
+        loop = get_event_loop()
         return jsonify({
             'status': 'healthy',
-            'service': 'act-executor'
+            'service': 'act-executor',
+            'event_loop': 'working'
         })
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
@@ -36,117 +57,25 @@ def health_check():
             'error': str(e)
         }), 500
 
-@app.route('/container/start', methods=['POST'])
-def start_container():
-    """Start a new container for an artifact."""
+@app.route('/execute', methods=['POST'])
+@async_route
+async def execute_workflow():
+    """Execute ACT workflow endpoint."""
     try:
         data = request.get_json()
-        artifact_id = data.get('artifactId')
-        
-        if not artifact_id:
+        if not data or 'content' not in data:
+            logger.error("No ACT content provided")
             return jsonify({
                 'status': 'error',
-                'error': 'Missing artifactId'
+                'error': 'No ACT content provided'
             }), 400
 
-        # Stop existing container if it exists
-        if artifact_id in containers:
-            try:
-                existing_container = docker_client.containers.get(containers[artifact_id])
-                existing_container.stop()
-                existing_container.remove()
-            except:
-                pass
-
-        # Create new container
-        container = docker_client.containers.run(
-            'flow-runner',
-            detach=True,
-            name=f'flow-{artifact_id}',
-            network='act-network'
-        )
-
-        containers[artifact_id] = container.id
-
-        return jsonify({
-            'status': 'success',
-            'containerId': container.id
-        })
-
-    except Exception as e:
-        logger.error(f"Error starting container: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
-
-@app.route('/container/stop', methods=['POST'])
-def stop_container():
-    """Stop a container for an artifact."""
-    try:
-        data = request.get_json()
-        artifact_id = data.get('artifactId')
+        logger.info("Starting workflow execution")
+        executor = ActContentExecutor(data['content'])
+        result = await executor.execute()
         
-        if not artifact_id:
-            return jsonify({
-                'status': 'error',
-                'error': 'Missing artifactId'
-            }), 400
-
-        if artifact_id in containers:
-            container_id = containers[artifact_id]
-            try:
-                container = docker_client.containers.get(container_id)
-                container.stop()
-                container.remove()
-                del containers[artifact_id]
-            except:
-                pass
-
-        return jsonify({
-            'status': 'success'
-        })
-
-    except Exception as e:
-        logger.error(f"Error stopping container: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
-
-@app.route('/container/execute', methods=['POST'])
-def execute_workflow():
-    """Execute workflow in a specific container."""
-    try:
-        data = request.get_json()
-        artifact_id = data.get('artifactId')
-        content = data.get('content')
-        
-        if not artifact_id or not content:
-            return jsonify({
-                'status': 'error',
-                'error': 'Missing required parameters'
-            }), 400
-
-        if artifact_id not in containers:
-            return jsonify({
-                'status': 'error',
-                'error': 'Container not found'
-            }), 404
-
-        container_id = containers[artifact_id]
-        container = docker_client.containers.get(container_id)
-
-        # Execute workflow in container
-        exec_result = container.exec_run(
-            cmd=['python', 'flow_runner.py'],
-            environment={'FLOW_CONTENT': json.dumps(content)}
-        )
-
-        return jsonify({
-            'status': 'success',
-            'result': exec_result.output.decode()
-        })
+        logger.info("Workflow execution completed")
+        return jsonify(result)
 
     except Exception as e:
         logger.error(f"Error executing workflow: {str(e)}")
@@ -155,38 +84,32 @@ def execute_workflow():
             'error': str(e)
         }), 500
 
-@app.route('/container/health', methods=['POST'])
-def check_container_health():
-    """Check health of a specific container."""
-    try:
-        data = request.get_json()
-        artifact_id = data.get('artifactId')
-        
-        if not artifact_id:
-            return jsonify({
-                'status': 'error',
-                'error': 'Missing artifactId'
-            }), 400
+def cleanup():
+    """Cleanup function to close event loops."""
+    if hasattr(thread_local, 'loop'):
+        loop = thread_local.loop
+        if loop.is_running():
+            loop.stop()
+        if not loop.is_closed():
+            loop.close()
 
-        if artifact_id not in containers:
-            return jsonify({
-                'status': 'stopped'
-            })
+@app.before_first_request
+def before_first_request():
+    """Initialize the application before first request."""
+    # Set up event loop for main thread
+    get_event_loop()
 
-        container_id = containers[artifact_id]
-        container = docker_client.containers.get(container_id)
-
-        return jsonify({
-            'status': container.status
-        })
-
-    except Exception as e:
-        logger.error(f"Error checking container health: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+@app.teardown_appcontext
+def teardown_appcontext(exception=None):
+    """Clean up when the application context ends."""
+    cleanup()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
-    app.run(host='0.0.0.0', port=port)
+    
+    # Configure threaded operation
+    app.run(
+        host='0.0.0.0', 
+        port=port,
+        threaded=True  # Enable threading
+    )

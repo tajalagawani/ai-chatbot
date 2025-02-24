@@ -28,6 +28,6 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     "next.config.js"
-  ],
+, "artifacts/code/CodeEditor.jsx", "artifacts/code/CodeEditor.jsx", "artifacts/code/CodeEditor.jsx"  ],
   "exclude": ["node_modules"]
 }

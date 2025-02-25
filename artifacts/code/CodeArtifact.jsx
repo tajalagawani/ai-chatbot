@@ -192,7 +192,7 @@ const codeArtifact = {
       }
       
       console.log('FLOW CONTENT UPDATED, SAVING TO CODE CONTENT');
-      toast.info('Flow changes saved to code');
+      // toast.info('Flow changes saved to code');
       setFlowContentUpdated(true);
       
       // Force the content to update

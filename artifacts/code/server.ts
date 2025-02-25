@@ -528,6 +528,7 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
 // Fix for the onUpdateDocument function
 // The current function can return null, but the type expects a string
 
+// Fix for the onUpdateDocument function
 onUpdateDocument: async ({ document, description, dataStream }) => {
   try {
     const currentValidator = new ActValidator(document.content, true);
@@ -542,6 +543,12 @@ onUpdateDocument: async ({ document, description, dataStream }) => {
     let updatedContent = document.content;
 
     try {
+      // First, set the document as updating to avoid race conditions
+      dataStream.writeData({
+        type: 'code-delta',
+        content: document.content,
+      });
+
       const { fullStream } = await streamObject({
         model: myProvider.languageModel('artifact-model'),
         system: SYSTEM_PROMPTS.update,
@@ -577,15 +584,41 @@ onUpdateDocument: async ({ document, description, dataStream }) => {
         }
       }
 
+      // Ensure we complete the operation by writing final data and signaling completion
+      dataStream.writeData({
+        type: 'code-delta',
+        content: updatedContent,
+      });
+      
+      // Signal that the update is complete - this is crucial to properly close the tool invocation
+      dataStream.writeData({ 
+        type: 'finish', 
+        content: '' 
+      });
+
       // Return the updated content (or original if no valid updates occurred)
       return updatedContent;
     } catch (error) {
       console.error('Error during AI processing:', error);
+      
+      // Signal completion even when an error occurs
+      dataStream.writeData({ 
+        type: 'finish', 
+        content: 'Error occurred during update' 
+      });
+      
       // Return original content on error
       return document.content; 
     }
   } catch (error) {
     console.error('Error in onUpdateDocument:', error);
+    
+    // Signal completion in the outer catch block too
+    dataStream.writeData({ 
+      type: 'finish', 
+      content: 'Error occurred in document handler' 
+    });
+    
     // Always return a string, never null
     return document.content;
   }

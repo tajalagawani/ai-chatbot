@@ -43,8 +43,9 @@ const codeArtifact = {
         executionId: null,
         executionStatus: null,
         executionResult: null,
-        showFlowOption: true,  // Set this to true by default
+        showFlowOption: true,
         isFlowFullscreen: false,
+        isStreaming: false, // Add isStreaming flag to metadata
         outputs: [{
           id: generateUUID(),
           contents: [{
@@ -78,8 +79,9 @@ const codeArtifact = {
         executionId: null,
         executionStatus: null,
         executionResult: null,
-        showFlowOption: true,  // Set this to true by default
+        showFlowOption: true,
         isFlowFullscreen: false,
+        isStreaming: false,
         outputs: [{
           id: generateUUID(),
           contents: [{
@@ -103,12 +105,38 @@ const codeArtifact = {
     const [flowContentUpdated, setFlowContentUpdated] = useState(false);
     const contentRef = useRef(content);
     const lastSavedContentRef = useRef(content);
+    const isStreamingRef = useRef(false);
 
     // Use a separate controlled view mode that doesn't rely on metadata
     const [viewMode, setViewMode] = useState(metadata?.viewMode || 'code');
     
     // Use a ref to track the latest metadata viewMode
     const metadataViewModeRef = useRef(metadata?.viewMode || 'code');
+    
+    // Track streaming state for auto-save prevention
+    useEffect(() => {
+      isStreamingRef.current = metadata?.status === 'streaming';
+      
+      // When streaming starts, update metadata
+      if (metadata?.status === 'streaming') {
+        setMetadata(prev => ({
+          ...prev,
+          isStreaming: true
+        }));
+      } 
+      // When streaming ends, process final content sync and update metadata
+      else if (metadata?.status !== 'streaming' && metadata?.isStreaming) {
+        console.log('Streaming ended, processing final sync');
+        
+        // Allow a short delay before re-enabling auto-save
+        setTimeout(() => {
+          setMetadata(prev => ({
+            ...prev,
+            isStreaming: false
+          }));
+        }, 500);
+      }
+    }, [metadata?.status, setMetadata]);
     
     // Update the ref whenever metadata.viewMode changes
     useEffect(() => {
@@ -131,6 +159,18 @@ const codeArtifact = {
       }
     }, [content]);
 
+    // Create a wrapped onSaveContent that checks streaming state
+    const handleSaveContent = useCallback((updatedContent, debounce = true) => {
+      // Skip auto-save during streaming
+      if (isStreamingRef.current && debounce) {
+        console.log('Auto-save skipped during streaming');
+        return;
+      }
+      
+      // Process save normally
+      onSaveContent(updatedContent, debounce);
+    }, [onSaveContent]);
+
     // Handle updates from flow to code with explicit debugging
     const handleFlowContentChange = useCallback((updatedContent) => {
       console.log('handleFlowContentChange called with content:', updatedContent?.substring(0, 50));
@@ -142,6 +182,12 @@ const codeArtifact = {
       
       if (updatedContent === contentRef.current) {
         console.log('Content unchanged, skipping save');
+        return;
+      }
+      
+      // Skip flow updates during streaming
+      if (isStreamingRef.current) {
+        console.log('Flow update skipped during streaming');
         return;
       }
       
@@ -159,6 +205,12 @@ const codeArtifact = {
 
     // Define a custom toggle handler that uses the ref for current state
     const handleToggleView = useCallback(() => {
+      // Skip view toggle during streaming
+      if (isStreamingRef.current) {
+        toast.warning('Cannot change views during content streaming');
+        return;
+      }
+      
       // Get the current view mode from our ref
       const currentViewMode = metadataViewModeRef.current;
       
@@ -293,7 +345,7 @@ const codeArtifact = {
 
     // Ensure flow changes are saved when switching views
     useEffect(() => {
-      if (viewMode === 'code' && flowContentUpdated) {
+      if (viewMode === 'code' && flowContentUpdated && !isStreamingRef.current) {
         console.log('Detected switch to code view with pending flow changes, ensuring they are saved');
         toast.info('Flow changes applied to code view');
         setFlowContentUpdated(false);
@@ -305,6 +357,7 @@ const codeArtifact = {
       console.log('Current metadata state:', metadata);
       console.log('Current view mode state:', viewMode);
       console.log('Ref view mode:', metadataViewModeRef.current);
+      console.log('Is streaming:', isStreamingRef.current);
     }, [metadata, viewMode]);
 
     // Force the metadata to have showFlowOption set to true
@@ -325,6 +378,12 @@ const codeArtifact = {
       try {
         const actContentDetected = isActContent(content);
         console.log("ACT content detected:", actContentDetected);
+        
+        // Skip view switching during streaming
+        if (isStreamingRef.current) {
+          console.log('Skipping view mode change during streaming');
+          return;
+        }
         
         setMetadata(prev => {
           // Calculate the new view mode, ensuring we don't override a manual setting
@@ -377,52 +436,16 @@ const codeArtifact = {
       }
     }, [handleToggleView]);
 
-    // // DEBUG ELEMENT - render view mode info
-    // const debugInfo = (
-    //   <div className="absolute top-2 left-2 z-50 bg-black text-white p-2 text-xs rounded">
-    //     <div>View: {viewMode}</div>
-    //     <div>Flow Updated: {flowContentUpdated ? 'Yes' : 'No'}</div>
-    //     <div>Content Length: {content?.length || 0}</div>
-    //     <Button 
-    //       onClick={handleToggleView} 
-    //       size="sm" 
-    //       className="mt-1 bg-blue-600 hover:bg-blue-700"
-    //     >
-    //       Toggle View
-    //     </Button>
-    //     <Button 
-    //       onClick={() => {
-    //         console.log('Manual save test');
-    //         if (viewMode === 'flow') {
-    //           toast.info('Manually saving flow changes');
-    //           // This is a test - you'd need to get updated content from the ActFlowVisualizer
-    //           // For testing, we'll just modify the existing content slightly
-    //           const testContent = content + "\n// Test modification";
-    //           handleFlowContentChange(testContent);
-    //         }
-    //       }} 
-    //       size="sm" 
-    //       className="mt-1 ml-1 bg-green-600 hover:bg-green-700"
-    //     >
-    //       Test Save
-    //     </Button>
-    //   </div>
-    // );
-
     return (
       <div className="relative w-full h-full">
-        {/* Enable debug state display */}
-      
-        
         <div className="absolute top-2 right-2 z-10 flex gap-2">
-          {/* <DockerStatus 
-            status={metadata?.dockerStatus === 'unavailable' 
-              ? 'unavailable' 
-              : metadata?.containerStatus || 'stopped'
-            } 
-            containerId={metadata?.containerId}
-            port={metadata?.port}
-          /> */}
+          {/* Status indicator for streaming */}
+          {isStreamingRef.current && (
+            <div className="bg-blue-100 border border-blue-200 text-blue-700 px-3 py-1 rounded-md text-sm flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Streaming content...</span>
+            </div>
+          )}
         </div>
 
         {viewMode === 'flow' ? (
@@ -440,11 +463,16 @@ const codeArtifact = {
               metadata={metadata}
               setMetadata={setMetadata}
               onContentChange={handleFlowContentChange}
+              status={metadata?.status}
             />
           </div>
         ) : (
           <div className="w-full h-[calc(100vh-80px)]">
-            <CodeEditor content={content} onSaveContent={onSaveContent} />
+            <CodeEditor 
+              content={content} 
+              onSaveContent={handleSaveContent}
+              status={metadata?.status}
+            />
             {metadata?.isValid === false && (
               <Alert variant="destructive" className="mt-4">
                 <AlertCircle className="h-4 w-4" />
@@ -472,23 +500,32 @@ const codeArtifact = {
     );
   },
 
-  // Keep original actions, our custom content component will handle the toggle
   actions: actions,
   toolbar: toolbar,
 
   onStreamPart: ({ streamPart, setArtifact }) => {
     if (streamPart.type === 'code-delta') {
-      setArtifact((draftArtifact) => ({
-        ...draftArtifact,
-        content: streamPart.content,
-        isVisible:
-          draftArtifact.status === 'streaming' &&
-          draftArtifact.content.length > 300 &&
-          draftArtifact.content.length < 310
-            ? true
-            : draftArtifact.isVisible,
-        status: 'streaming',
-      }));
+      console.log('Stream part received:', streamPart.content?.substring(0, 50) + '...');
+      
+      setArtifact((draftArtifact) => {
+        // Update all content-related properties to ensure consistency
+        const updatedArtifact = {
+          ...draftArtifact,
+          content: streamPart.content,
+          currentContent: streamPart.content,
+          lastContent: streamPart.content,
+          lastUpdateTime: Date.now(),
+          isVisible:
+            draftArtifact.status === 'streaming' &&
+            streamPart.content.length > 300 &&
+            streamPart.content.length < 310
+              ? true
+              : draftArtifact.isVisible,
+          status: 'streaming',
+        };
+        
+        return updatedArtifact;
+      });
     }
   },
 

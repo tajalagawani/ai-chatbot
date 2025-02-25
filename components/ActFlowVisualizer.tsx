@@ -539,22 +539,16 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     }
   }, [content, initialLayout, setNodes, setEdges, reactFlowInstance]);
 
-  // Define node types with proper memoization
   const nodeTypes = useMemo<NodeTypes>(() => ({
-    baseNode: (props: any) => (
-      <BaseNode
-        {...props}
-        icon={<Box />}
-        nodeKind={props.data.nodeKind}
-        nodeType={props.data.nodeType}
-        onNodeDataChange={handleNodeDataChange}
-        onNodeDelete={handleNodeDelete}
-        allNodes={nodes}
-        allEdges={edges}
-      />
-    ),
-  }), [nodes, edges, handleNodeDataChange, handleNodeDelete]);
-
+  baseNode: (props: any) => (
+    <BaseNode
+      {...props}
+      icon={<Box />}
+      onNodeDataChange={handleNodeDataChange}
+      onNodeDelete={handleNodeDelete}
+    />
+  ),
+}), [handleNodeDataChange, handleNodeDelete]);
   // Memoize edge types
   const edgeTypes = useMemo<EdgeTypes>(() => ({
     custom: CustomEdge,

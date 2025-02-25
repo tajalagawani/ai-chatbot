@@ -525,16 +525,23 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
       throw error;
     }
   },
+// Fix for the onUpdateDocument function
+// The current function can return null, but the type expects a string
 
-  onUpdateDocument: async ({ document, description, dataStream }) => {
+onUpdateDocument: async ({ document, description, dataStream }) => {
+  try {
+    const currentValidator = new ActValidator(document.content, true);
+    
+    if (!currentValidator.validate()) {
+      console.error('Current document validation failed');
+      // Return original content instead of potentially null
+      return document.content;
+    }
+
+    // Always assume we're working with existing document content
+    let updatedContent = document.content;
+
     try {
-      const currentValidator = new ActValidator(document.content, true);
-      
-      if (!currentValidator.validate()) {
-        console.error('Current document validation failed');
-        return document.content;
-      }
-
       const { fullStream } = await streamObject({
         model: myProvider.languageModel('artifact-model'),
         system: SYSTEM_PROMPTS.update,
@@ -552,7 +559,6 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
         temperature: 0.7
       });
 
-      let updatedContent = document.content;
       let lastValidContent = document.content;
 
       for await (const chunk of fullStream) {
@@ -571,12 +577,19 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
         }
       }
 
+      // Return the updated content (or original if no valid updates occurred)
       return updatedContent;
     } catch (error) {
-      console.error('Error in onUpdateDocument:', error);
-      return document.content;
+      console.error('Error during AI processing:', error);
+      // Return original content on error
+      return document.content; 
     }
-  },
+  } catch (error) {
+    console.error('Error in onUpdateDocument:', error);
+    // Always return a string, never null
+    return document.content;
+  }
+},
 
   onStreamPart: ({ streamPart, setArtifact }) => {
     if (streamPart.type === 'code-delta') {

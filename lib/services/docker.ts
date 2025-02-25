@@ -72,11 +72,7 @@ class DockerService {
         throw new Error('Invalid or missing artifact ID');
       }
 
-      // Check if service is healthy
-      const isHealthy = await this.checkHealth();
-      if (!isHealthy) {
-        throw new Error('Docker service is not available');
-      }
+   
 
       // Check for existing running container
       const existingContainer = this.containerStatus.get(artifactId);
@@ -334,7 +330,6 @@ class DockerService {
             };
           }
         } catch (directError) {
-          console.warn(`Direct health check error: ${directError.message}`);
         }
       }
 
@@ -422,24 +417,24 @@ class DockerService {
     }
   }
 
-  public async checkHealth(): Promise<boolean> {
-    try {
-      const response = await fetch(`${this._baseUrl}/health`, {
-        signal: AbortSignal.timeout(3000)
-      });
+  // public async checkHealth(): Promise<boolean> {
+  //   try {
+  //     const response = await fetch(`${this._baseUrl}/health`, {
+  //       signal: AbortSignal.timeout(3000)
+  //     });
       
-      if (!response.ok) {
-        console.error(`Health check failed with status: ${response.status}`);
-        return false;
-      }
+  //     if (!response.ok) {
+  //       console.error(`Health check failed with status: ${response.status}`);
+  //       return false;
+  //     }
       
-      const data = await response.json();
-      return data.status === 'healthy';
-    } catch (error) {
-      console.error('Docker health check failed:', error);
-      return false;
-    }
-  }
+  //     const data = await response.json();
+  //     return data.status === 'healthy';
+  //   } catch (error) {
+  //     console.error('Docker health check failed:', error);
+  //     return false;
+  //   }
+  // }
 
   public cleanup() {
     for (const interval of this.statusPollingIntervals.values()) {

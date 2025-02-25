@@ -92,7 +92,7 @@ const codeArtifact = {
         lastError: errorMessage
       });
   
-      toast.error(`Docker initialization failed: ${errorMessage}`);
+      toast.error(`Agent initialization failed: ${errorMessage}`);
     }
   },
 
@@ -377,52 +377,52 @@ const codeArtifact = {
       }
     }, [handleToggleView]);
 
-    // DEBUG ELEMENT - render view mode info
-    const debugInfo = (
-      <div className="absolute top-2 left-2 z-50 bg-black text-white p-2 text-xs rounded">
-        <div>View: {viewMode}</div>
-        <div>Flow Updated: {flowContentUpdated ? 'Yes' : 'No'}</div>
-        <div>Content Length: {content?.length || 0}</div>
-        <Button 
-          onClick={handleToggleView} 
-          size="sm" 
-          className="mt-1 bg-blue-600 hover:bg-blue-700"
-        >
-          Toggle View
-        </Button>
-        <Button 
-          onClick={() => {
-            console.log('Manual save test');
-            if (viewMode === 'flow') {
-              toast.info('Manually saving flow changes');
-              // This is a test - you'd need to get updated content from the ActFlowVisualizer
-              // For testing, we'll just modify the existing content slightly
-              const testContent = content + "\n// Test modification";
-              handleFlowContentChange(testContent);
-            }
-          }} 
-          size="sm" 
-          className="mt-1 ml-1 bg-green-600 hover:bg-green-700"
-        >
-          Test Save
-        </Button>
-      </div>
-    );
+    // // DEBUG ELEMENT - render view mode info
+    // const debugInfo = (
+    //   <div className="absolute top-2 left-2 z-50 bg-black text-white p-2 text-xs rounded">
+    //     <div>View: {viewMode}</div>
+    //     <div>Flow Updated: {flowContentUpdated ? 'Yes' : 'No'}</div>
+    //     <div>Content Length: {content?.length || 0}</div>
+    //     <Button 
+    //       onClick={handleToggleView} 
+    //       size="sm" 
+    //       className="mt-1 bg-blue-600 hover:bg-blue-700"
+    //     >
+    //       Toggle View
+    //     </Button>
+    //     <Button 
+    //       onClick={() => {
+    //         console.log('Manual save test');
+    //         if (viewMode === 'flow') {
+    //           toast.info('Manually saving flow changes');
+    //           // This is a test - you'd need to get updated content from the ActFlowVisualizer
+    //           // For testing, we'll just modify the existing content slightly
+    //           const testContent = content + "\n// Test modification";
+    //           handleFlowContentChange(testContent);
+    //         }
+    //       }} 
+    //       size="sm" 
+    //       className="mt-1 ml-1 bg-green-600 hover:bg-green-700"
+    //     >
+    //       Test Save
+    //     </Button>
+    //   </div>
+    // );
 
     return (
       <div className="relative w-full h-full">
         {/* Enable debug state display */}
-        {debugInfo}
+      
         
         <div className="absolute top-2 right-2 z-10 flex gap-2">
-          <DockerStatus 
+          {/* <DockerStatus 
             status={metadata?.dockerStatus === 'unavailable' 
               ? 'unavailable' 
               : metadata?.containerStatus || 'stopped'
             } 
             containerId={metadata?.containerId}
             port={metadata?.port}
-          />
+          /> */}
         </div>
 
         {viewMode === 'flow' ? (

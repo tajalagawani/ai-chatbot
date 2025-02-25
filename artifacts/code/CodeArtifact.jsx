@@ -100,6 +100,9 @@ const codeArtifact = {
     const [isExecuting, setIsExecuting] = useState(false);
     const [initialViewSet, setInitialViewSet] = useState(false);
     const { width: windowWidth, height: windowHeight } = useWindowSize();
+    const [flowContentUpdated, setFlowContentUpdated] = useState(false);
+    const contentRef = useRef(content);
+    const lastSavedContentRef = useRef(content);
 
     // Use a separate controlled view mode that doesn't rely on metadata
     const [viewMode, setViewMode] = useState(metadata?.viewMode || 'code');
@@ -115,16 +118,56 @@ const codeArtifact = {
       }
     }, [metadata?.viewMode]);
 
-    // Handle updates from flow to code
+    // Keep track of the latest content
+    useEffect(() => {
+      contentRef.current = content;
+    }, [content]);
+
+    // Add a debug message/toast when content changes
+    useEffect(() => {
+      if (content !== lastSavedContentRef.current) {
+        console.log('Content changed from:', lastSavedContentRef.current?.substring(0, 50), 'to:', content?.substring(0, 50));
+        lastSavedContentRef.current = content;
+      }
+    }, [content]);
+
+    // Handle updates from flow to code with explicit debugging
     const handleFlowContentChange = useCallback((updatedContent) => {
-      if (!updatedContent) return;
+      console.log('handleFlowContentChange called with content:', updatedContent?.substring(0, 50));
+      
+      if (!updatedContent) {
+        console.warn('Flow provided empty content, ignoring update');
+        return;
+      }
+      
+      if (updatedContent === contentRef.current) {
+        console.log('Content unchanged, skipping save');
+        return;
+      }
+      
+      console.log('FLOW CONTENT UPDATED, SAVING TO CODE CONTENT');
+      toast.info('Flow changes saved to code');
+      setFlowContentUpdated(true);
+      
+      // Force the content to update
+      lastSavedContentRef.current = updatedContent;
       onSaveContent(updatedContent, false);
+      
+      // Log to confirm content was updated
+      console.log('Content updated from flow:', updatedContent.substring(0, 100) + '...');
     }, [onSaveContent]);
 
     // Define a custom toggle handler that uses the ref for current state
     const handleToggleView = useCallback(() => {
       // Get the current view mode from our ref
       const currentViewMode = metadataViewModeRef.current;
+      
+      // If we're switching from flow to code and have pending changes, ensure they're saved
+      if (currentViewMode === 'flow' && flowContentUpdated) {
+        console.log('Ensuring flow changes are saved before switching to code view');
+        toast.info('Flow changes saved before switching views');
+        setFlowContentUpdated(false);
+      }
       
       // Calculate the new view mode
       const newViewMode = currentViewMode === 'flow' ? 'code' : 'flow';
@@ -145,7 +188,7 @@ const codeArtifact = {
           viewMode: newViewMode
         };
       });
-    }, [setMetadata]);
+    }, [setMetadata, flowContentUpdated]);
 
     // Monitor execution status
     useEffect(() => {
@@ -248,6 +291,15 @@ const codeArtifact = {
       return () => window.removeEventListener('keydown', handleKeyDown);
     }, [metadata?.isFlowFullscreen, setMetadata]);
 
+    // Ensure flow changes are saved when switching views
+    useEffect(() => {
+      if (viewMode === 'code' && flowContentUpdated) {
+        console.log('Detected switch to code view with pending flow changes, ensuring they are saved');
+        toast.info('Flow changes applied to code view');
+        setFlowContentUpdated(false);
+      }
+    }, [viewMode, flowContentUpdated]);
+
     // Add direct console log to check metadata state at runtime
     useEffect(() => {
       console.log('Current metadata state:', metadata);
@@ -328,7 +380,9 @@ const codeArtifact = {
     // DEBUG ELEMENT - render view mode info
     const debugInfo = (
       <div className="absolute top-2 left-2 z-50 bg-black text-white p-2 text-xs rounded">
-   
+        <div>View: {viewMode}</div>
+        <div>Flow Updated: {flowContentUpdated ? 'Yes' : 'No'}</div>
+        <div>Content Length: {content?.length || 0}</div>
         <Button 
           onClick={handleToggleView} 
           size="sm" 
@@ -336,12 +390,28 @@ const codeArtifact = {
         >
           Toggle View
         </Button>
+        <Button 
+          onClick={() => {
+            console.log('Manual save test');
+            if (viewMode === 'flow') {
+              toast.info('Manually saving flow changes');
+              // This is a test - you'd need to get updated content from the ActFlowVisualizer
+              // For testing, we'll just modify the existing content slightly
+              const testContent = content + "\n// Test modification";
+              handleFlowContentChange(testContent);
+            }
+          }} 
+          size="sm" 
+          className="mt-1 ml-1 bg-green-600 hover:bg-green-700"
+        >
+          Test Save
+        </Button>
       </div>
     );
 
     return (
       <div className="relative w-full h-full">
-        {/* Debug state display - uncomment if needed */}
+        {/* Enable debug state display */}
         {debugInfo}
         
         <div className="absolute top-2 right-2 z-10 flex gap-2">

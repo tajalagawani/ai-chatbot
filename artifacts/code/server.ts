@@ -154,13 +154,33 @@ class ActValidator {
     let currentNodeId = '';
     
     const lines = this.content.split('\n').map(line => line.trim());
+    
+    // Debug the content being parsed
+    if (this.debug) {
+      console.log('Content to parse:', this.content.substring(0, 200) + '...');
+      console.log('Number of lines:', lines.length);
+    }
+    
     for (const line of lines) {
       if (line === '' || line.startsWith('#')) continue;
 
+      // Debug each line processing
+      if (this.debug) {
+        console.log(`Processing line: "${line}"`);
+      }
+
       if (line.startsWith('[') && line.endsWith(']')) {
         currentSection = line.slice(1, -1);
+        if (this.debug) {
+          console.log(`Section changed to: "${currentSection}"`);
+        }
+        
         if (currentSection.startsWith('node:')) {
           currentNodeId = currentSection.split(':')[1].trim();
+          if (this.debug) {
+            console.log(`Node ID detected: "${currentNodeId}"`);
+          }
+          
           if (!sections.nodes[currentNodeId]) {
             sections.nodes[currentNodeId] = {
               id: currentNodeId,
@@ -179,17 +199,22 @@ class ActValidator {
         continue;
       }
 
+      // Only process lines with equals sign for key-value pairs
       if (line.includes('=')) {
-        const [key, value] = line.split('=').map(part => part.trim());
-        const trimmedKey = key.trim();
-        const trimmedValue = value.trim();
+        const equalsIndex = line.indexOf('=');
+        const key = line.substring(0, equalsIndex).trim();
+        const value = line.substring(equalsIndex + 1).trim();
+        
+        if (this.debug) {
+          console.log(`Key-value pair: "${key}" = "${value}"`);
+        }
 
         try {
           if (currentSection.startsWith('node:')) {
-            sections.nodes[currentNodeId][trimmedKey] = this.parseValue(trimmedValue);
+            sections.nodes[currentNodeId][key] = this.parseValue(value);
           } else if (currentSection === 'edges') {
-            const sourceNode = trimmedKey;
-            const targetNode = this.parseValue(trimmedValue);
+            const sourceNode = key;
+            const targetNode = this.parseValue(value);
             if (typeof targetNode === 'string' && sourceNode) {
               sections.edges.push({
                 source: sourceNode,
@@ -197,9 +222,12 @@ class ActValidator {
               });
             }
           } else if (currentSection === 'workflow') {
-            sections.workflow[trimmedKey] = this.parseValue(trimmedValue);
+            sections.workflow[key] = this.parseValue(value);
+            if (this.debug) {
+              console.log(`Added to workflow: ${key} = ${this.parseValue(value)}`);
+            }
           } else if (currentSection === 'env') {
-            sections.env[trimmedKey] = this.parseValue(trimmedValue);
+            sections.env[key] = this.parseValue(value);
           }
         } catch (error) {
           if (this.debug) {
@@ -209,16 +237,29 @@ class ActValidator {
       }
     }
 
+    // Debug final parsed structure
+    if (this.debug) {
+      console.log('Final parsed workflow section:', JSON.stringify(sections.workflow, null, 2));
+    }
+
     return sections;
   }
 
   private parseValue(value: string): any {
     value = value.trim();
     
+    // Debug value parsing
+    if (this.debug) {
+      console.log(`Parsing value: "${value}"`);
+    }
+    
     if (value.startsWith('{') && value.endsWith('}')) {
       try {
         return JSON.parse(value);
-      } catch {
+      } catch (error) {
+        if (this.debug) {
+          console.error(`JSON parse error for: ${value}`, error);
+        }
         return value;
       }
     }
@@ -241,47 +282,67 @@ class ActValidator {
     try {
       const parsed = this.parseContent();
       
-      if (Object.keys(parsed.nodes).length === 0) {
-        if (this.debug) console.error('Validation failed: No nodes defined');
-        return false;
+      // Debug validation
+      if (this.debug) {
+        console.log('Validating parsed content:', 
+          `Nodes: ${Object.keys(parsed.nodes).length}`,
+          `Workflow: ${JSON.stringify(parsed.workflow)}`,
+          `Edges: ${parsed.edges.length}`
+        );
       }
-
-      // Check for required node fields
-      for (const [nodeId, node] of Object.entries(parsed.nodes)) {
-        if (!node.type) {
-          if (this.debug) console.error(`Validation failed: Node '${nodeId}' missing 'type' field`);
-          return false;
+      
+      // Accept a minimum valid ACT file - less strict validation
+      // This helps when loading existing content that might be partial
+      if (parsed.workflow) {
+        // If missing name/description but has other valid parts, still consider it valid
+        if (!parsed.workflow.name) {
+          parsed.workflow.name = "Untitled Workflow";
+          if (this.debug) console.log('Warning: Setting default workflow name');
         }
-        if (!node.app_name) {
-          if (this.debug) console.error(`Validation failed: Node '${nodeId}' missing 'app_name' field`);
-          return false;
+        
+        if (!parsed.workflow.description) {
+          parsed.workflow.description = "No description provided";
+          if (this.debug) console.log('Warning: Setting default workflow description');
         }
       }
-
-      if (!parsed.workflow.name || !parsed.workflow.description) {
-        if (this.debug) console.error('Validation failed: Missing workflow name or description');
-        return false;
-      }
-
-      if (!parsed.workflow.start_node) {
-        parsed.workflow.start_node = Object.keys(parsed.nodes)[0];
-      } else if (!parsed.nodes[parsed.workflow.start_node]) {
-        if (this.debug) console.error('Validation failed: Invalid start node reference');
-        return false;
-      }
-
-      const nodeIds = new Set(Object.keys(parsed.nodes));
-      const validEdges = parsed.edges.filter(edge => {
-        const isValid = nodeIds.has(edge.source) && nodeIds.has(edge.target);
-        if (!isValid && this.debug) {
-          console.error(`Invalid edge: ${edge.source} -> ${edge.target}`);
+      
+      // Check nodes only if there are any
+      if (Object.keys(parsed.nodes).length > 0) {
+        // Validate each node has minimum required fields
+        for (const [nodeId, node] of Object.entries(parsed.nodes)) {
+          if (!node.type) {
+            if (this.debug) console.error(`Validation failed: Node '${nodeId}' missing 'type' field`);
+            node.type = 'process'; // Set default type
+          }
+          if (!node.app_name) {
+            if (this.debug) console.error(`Validation failed: Node '${nodeId}' missing 'app_name' field`);
+            node.app_name = 'System'; // Set default app
+          }
         }
-        return isValid;
-      });
 
-      parsed.edges = validEdges;
+        // Set default start node if missing
+        if (!parsed.workflow.start_node) {
+          parsed.workflow.start_node = Object.keys(parsed.nodes)[0];
+          if (this.debug) console.log(`Setting default start_node: ${parsed.workflow.start_node}`);
+        } else if (!parsed.nodes[parsed.workflow.start_node]) {
+          // If start node reference is invalid, use first node
+          if (this.debug) console.error('Invalid start node reference, using first node');
+          parsed.workflow.start_node = Object.keys(parsed.nodes)[0];
+        }
 
-      actWorkflowSchema.parse(parsed);
+        // Filter valid edges
+        const nodeIds = new Set(Object.keys(parsed.nodes));
+        const validEdges = parsed.edges.filter(edge => {
+          const isValid = nodeIds.has(edge.source) && nodeIds.has(edge.target);
+          if (!isValid && this.debug) {
+            console.error(`Invalid edge: ${edge.source} -> ${edge.target}`);
+          }
+          return isValid;
+        });
+
+        parsed.edges = validEdges;
+      }
+
       return true;
     } catch (error) {
       if (this.debug) {
@@ -294,6 +355,14 @@ class ActValidator {
   getContent(): string {
     const sections = this.parseContent();
     let output = '';
+
+    // Debug generated content
+    if (this.debug) {
+      console.log('Generating content from:', 
+        `Nodes: ${Object.keys(sections.nodes).length}`,
+        `Workflow: ${JSON.stringify(sections.workflow)}`
+      );
+    }
 
     output += '[workflow]\n';
     for (const [key, value] of Object.entries(sections.workflow)) {

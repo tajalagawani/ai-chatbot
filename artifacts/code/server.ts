@@ -65,13 +65,48 @@ CRITICAL RULES
 4. Data Flow: Validate edge connections between nodes
 5. Response Format: Follow exact INI format structure
 
+EDGES RULES
+============
+1.  Edge definitions MUST follow this exact format:
+   [edges]
+   actual_source_node_id = actual_target_node_id
+2. NEVER use literal strings like "source_node" or "target_node"
+   INCORRECT: source_node = target_node
+   CORRECT: start = get_pr_details
+
+3. All edge connections must reference actual node IDs defined in the workflow
+4. Each edge must be on its own line under the [edges] section
+5. Ensure all edge connections are valid and logical
 NAMING CONVENTIONS
 ================
 1. Node IDs: lowercase with underscores
 2. Environment Variables: UPPERCASE with underscores
 3. Parameters: camelCase for JSON keys
 4. Node Types: lowercase (start, process, end, error, decision)
-5. App Names: PascalCase (GitHub, Slack, OpenAI)`;
+5. App Names: PascalCase (GitHub, Slack, OpenAI)
+
+LAYOUT ALGORITHM REQUIREMENTS
+============================
+1. Position nodes in a logical flow-chart pattern from top to bottom and left to right
+2. Each node has a size of 130x130 pixels
+3. Start node should be positioned at the top (lowest y value)
+4. End node should be positioned at the bottom (highest y value)
+5. Maintain a minimum horizontal spacing of 250 pixels between node centers (220 pixels clear space)
+6. Maintain a minimum vertical spacing of 200 pixels between node centers (270 pixels clear space)
+7. Position nodes based on their logical sequence in the workflow
+8. Decision nodes should have their conditional paths positioned appropriately:
+   - "Yes" or "True" paths should flow downward or to the right
+   - "No" or "False" paths should flow to a different direction
+9. Group related nodes by positioning them in proximity to each other 200 pixels apart
+10. Error handler nodes should be positioned at the bottom of the diagram
+11. All coordinates must be positive integers
+12. Sequential nodes should form clear paths without overlapping
+
+`
+
+;
+
+
 
 // Artifacts UI Guidelines
 const ARTIFACTS_PROMPT = `
@@ -496,7 +531,7 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
         schema: z.object({
           content: z.string(),
         }),
-        maxTokens: 4000,
+        maxTokens: 20000,
         temperature: 0.1
       });
 

@@ -143,7 +143,7 @@
 
 .cm-editor,
 .cm-gutters {
-    @apply bg-background dark:bg-[#0d1116] outline-none selection:bg-zinc-700 !important;
+    @apply bg-background dark:bg-[#09090b] outline-none selection:bg-zinc-700 !important;
 }
 
 .ͼo.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,

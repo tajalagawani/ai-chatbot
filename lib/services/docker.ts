@@ -417,24 +417,24 @@ class DockerService {
     }
   }
 
-  // public async checkHealth(): Promise<boolean> {
-  //   try {
-  //     const response = await fetch(`${this._baseUrl}/health`, {
-  //       signal: AbortSignal.timeout(3000)
-  //     });
+  public async checkHealth(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this._baseUrl}/health`, {
+        signal: AbortSignal.timeout(3000)
+      });
       
-  //     if (!response.ok) {
-  //       console.error(`Health check failed with status: ${response.status}`);
-  //       return false;
-  //     }
+      if (!response.ok) {
+        console.error(`Health check failed with status: ${response.status}`);
+        return false;
+      }
       
-  //     const data = await response.json();
-  //     return data.status === 'healthy';
-  //   } catch (error) {
-  //     console.error('Docker health check failed:', error);
-  //     return false;
-  //   }
-  // }
+      const data = await response.json();
+      return data.status === 'healthy';
+    } catch (error) {
+      console.error('Docker health check failed:', error);
+      return false;
+    }
+  }
 
   public cleanup() {
     for (const interval of this.statusPollingIntervals.values()) {

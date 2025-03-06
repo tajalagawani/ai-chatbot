@@ -5,8 +5,9 @@ import logging
 import threading
 import subprocess
 import io
+import sys
 from queue import Queue
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Deque
 from collections import deque
 from flask import Flask, request, jsonify, Response
@@ -62,6 +63,11 @@ class ExecutionInfo:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     logs: List[Dict[str, Any]] = None
+    current_node: Optional[str] = None
+    node_status: Dict[str, str] = field(default_factory=dict)
+    executed_nodes: List[str] = field(default_factory=list)
+    executor: Any = None  # Add this field to store the executor reference
+
 
     def __post_init__(self):
         if self.logs is None:
@@ -72,8 +78,95 @@ active_executions: Dict[str, ExecutionInfo] = {}
 execution_queue = Queue()
 execution_lock = threading.Lock()
 
-# Initialize executor
-executor = ActContentExecutor()
+# Initialize executor with node progress tracking
+class NodeTrackingExecutor(ActContentExecutor):
+    def __init__(self):
+        super().__init__()
+        
+    def on_node_start(self, node_id, execution_id):
+        """Track when a node starts executing"""
+        with execution_lock:
+            if execution_id in active_executions:
+                active_executions[execution_id].current_node = node_id
+                active_executions[execution_id].node_status[node_id] = 'executing'
+                
+                # Add to executed nodes list if not already there
+                if node_id not in active_executions[execution_id].executed_nodes:
+                    active_executions[execution_id].executed_nodes.append(node_id)
+                    
+                logger.info(f"Execution {execution_id}: Node {node_id} started")
+                add_execution_log(execution_id, 'running', f"Node {node_id} started execution")
+    
+    def on_node_complete(self, node_id, execution_id, success=True):
+        """Track when a node completes execution"""
+        with execution_lock:
+            if execution_id in active_executions:
+                active_executions[execution_id].node_status[node_id] = 'completed' if success else 'failed'
+                
+                # Only clear current_node if it matches the completed node
+                if active_executions[execution_id].current_node == node_id:
+                    active_executions[execution_id].current_node = None
+                    
+                status = 'completed' if success else 'failed'
+                logger.info(f"Execution {execution_id}: Node {node_id} {status}")
+                add_execution_log(execution_id, status, f"Node {node_id} {status}")
+    
+    def execute(self, content, execution_id=None):
+        """Override execute to track node progress"""
+        if not execution_id:
+            return super().execute(content)
+            
+        # Parse the ACT content to get node IDs
+        try:
+            nodes = self.parse_act_nodes(content)
+            
+            # Initialize node status for all nodes
+            with execution_lock:
+                if execution_id in active_executions:
+                    for node_id in nodes:
+                        active_executions[execution_id].node_status[node_id] = 'pending'
+                        
+            # Execute with node tracking
+            self.on_node_start(nodes[0], execution_id)  # Start with first node
+            result = super().execute(content)
+            
+            # Mark all nodes as completed
+            with execution_lock:
+                if execution_id in active_executions:
+                    for node_id in nodes:
+                        if node_id not in active_executions[execution_id].node_status or \
+                           active_executions[execution_id].node_status[node_id] != 'completed':
+                            active_executions[execution_id].node_status[node_id] = 'completed'
+                    
+                    # Clear current node
+                    active_executions[execution_id].current_node = None
+                    
+            return result
+            
+        except Exception as e:
+            # If error occurs, mark current node as failed
+            with execution_lock:
+                if execution_id in active_executions and active_executions[execution_id].current_node:
+                    node_id = active_executions[execution_id].current_node
+                    self.on_node_complete(node_id, execution_id, success=False)
+            raise e
+            
+    def parse_act_nodes(self, content):
+        """Parse node IDs from ACT content"""
+        nodes = []
+        lines = content.split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('[node:'):
+                # Extract node ID from section header like [node:node_id]
+                node_id = line[6:-1]  # Remove [node: and ]
+                nodes.append(node_id)
+                
+        return nodes
+
+# Use our tracking executor
+executor = NodeTrackingExecutor()
 
 def add_execution_log(exec_id, status, message):
     """Add log entry to execution history"""
@@ -118,12 +211,17 @@ def process_execution_queue():
                 logger.info(f"Starting execution {exec_id}")
                 add_execution_log(exec_id, 'running', f"Starting execution with {len(content)} characters")
                 
-                # Execute workflow
-                result = executor.execute(content)
+                # Update status
+                with execution_lock:
+                    execution.status = 'running'
+                
+                # Execute workflow with node tracking
+                result = executor.execute(content, execution_id=exec_id)
                 
                 with execution_lock:
                     execution.status = 'completed'
                     execution.result = result
+                    execution.current_node = None  # Clear current node
                     
                 # Log completion
                 logger.info(f"Execution {exec_id} completed successfully")
@@ -136,6 +234,7 @@ def process_execution_queue():
                 with execution_lock:
                     execution.status = 'failed'
                     execution.error = str(e)
+                    execution.current_node = None  # Clear current node
                     
         except Exception as e:
             logger.error(f"Error in queue processor: {e}")
@@ -193,9 +292,11 @@ def execute_workflow():
             'error': f"Unexpected error: {str(e)}"
         }), 500
 
+# Add these changes to your flask app (worker.py)
+
 @app.route('/status/<execution_id>')
 def execution_status(execution_id):
-    """Get status of a specific execution."""
+    """Get status of a specific execution with node tracking."""
     try:
         execution = active_executions.get(execution_id)
         if not execution:
@@ -203,13 +304,24 @@ def execution_status(execution_id):
                 'status': 'error',
                 'error': 'Execution not found'
             }), 404
-            
+        
+        # Basic response with execution status
         response = {
             'execution_id': execution.id,
             'status': execution.status,
             'start_time': execution.start_time
         }
         
+        # If executor is accessible, get detailed node status
+        executor = getattr(execution, 'executor', None)
+        if executor and hasattr(executor, 'get_execution_status'):
+            # Get detailed status including current node and node statuses
+            detailed_status = executor.get_execution_status()
+            response['current_node'] = detailed_status.get('current_node')
+            response['executed_nodes'] = detailed_status.get('executed_nodes', [])
+            response['node_status'] = detailed_status.get('node_status', {})
+        
+        # Add execution result if completed
         if execution.status == 'completed':
             response['result'] = execution.result
         elif execution.status == 'failed':

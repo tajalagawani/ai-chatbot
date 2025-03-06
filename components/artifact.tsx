@@ -112,8 +112,9 @@ function PureArtifact({
     fetcher,
     {
       revalidateOnFocus: true,
-      refreshInterval: 1000,
-      refreshWhenHidden: false
+      refreshInterval: isLoading ? 500 : 1000, // More frequent refreshes during loading
+      refreshWhenHidden: false,
+      dedupingInterval: isLoading ? 200 : 1000, // Shorter deduping during loading
     }
   );
 
@@ -125,6 +126,84 @@ function PureArtifact({
   const [isToolbarVisible, setIsToolbarVisible] = useState(false);
   const { width: windowWidth, height: windowHeight } = useWindowSize();
   const isMobile = windowWidth ? windowWidth < 768 : false;
+
+  // Enhanced reload function to ensure latest document is fetched and included in the request
+  const enhancedReload = useCallback(
+    async (chatRequestOptions?: ChatRequestOptions) => {
+      // First, explicitly fetch the latest document
+      if (artifact.documentId !== 'init') {
+        await mutateDocuments();
+        
+        // Get the most recent document content from the freshly updated documents
+        let latestContent = '';
+        if (documents && documents.length > 0) {
+          latestContent = documents[documents.length - 1].content || '';
+        } else {
+          latestContent = artifact.currentContent || artifact.content;
+        }
+        
+        // Include document content in the request body
+        const updatedOptions: ChatRequestOptions = {
+          ...chatRequestOptions,
+          data: {
+            ...(chatRequestOptions?.data || {}),
+            documentContent: latestContent,
+            documentId: artifact.documentId,
+            documentKind: artifact.kind,
+            documentTitle: artifact.title
+          }
+        };
+        
+        // Then proceed with the reload with document content
+        return reload(updatedOptions);
+      }
+      
+      // If no document, just reload normally
+      return reload(chatRequestOptions);
+    },
+    [artifact, documents, mutateDocuments, reload]
+  );
+
+  // Enhanced submit function to ensure latest document is fetched and included in the request
+  const enhancedHandleSubmit = useCallback(
+    async (event?: { preventDefault?: () => void }, chatRequestOptions?: ChatRequestOptions) => {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      
+      // Ensure we have the latest document before submitting
+      if (artifact.documentId !== 'init') {
+        await mutateDocuments();
+        
+        // Get the most recent document content from the freshly updated documents
+        let latestContent = '';
+        if (documents && documents.length > 0) {
+          latestContent = documents[documents.length - 1].content || '';
+        } else {
+          latestContent = artifact.currentContent || artifact.content;
+        }
+        
+        // Include document content in the request body
+        const updatedOptions: ChatRequestOptions = {
+          ...chatRequestOptions,
+          data: {
+            ...(chatRequestOptions?.data || {}),
+            documentContent: latestContent,
+            documentId: artifact.documentId,
+            documentKind: artifact.kind,
+            documentTitle: artifact.title
+          }
+        };
+        
+        // Then submit with document content
+        return handleSubmit(event, updatedOptions);
+      }
+      
+      // If no document, just submit normally
+      return handleSubmit(event, chatRequestOptions);
+    },
+    [artifact, documents, mutateDocuments, handleSubmit]
+  );
 
   // Handle setting initial document and version
   useEffect(() => {
@@ -148,15 +227,24 @@ function PureArtifact({
     if (artifact.lastContent && artifact.lastContent !== artifact.content) {
       setArtifact(current => ({
         ...current,
-        content: artifact.lastContent,
-        currentContent: artifact.lastContent
+        content: artifact.lastContent ?? '',
+        currentContent: artifact.lastContent ?? ''
       }));
     }
   }, [artifact.lastContent, artifact.content, setArtifact]);
 
+  // Trigger document refresh when artifact status changes
   useEffect(() => {
     mutateDocuments();
   }, [artifact.status, mutateDocuments]);
+
+  // Add document synchronization effect that runs when messages change
+  useEffect(() => {
+    // Whenever messages change, ensure we have latest document
+    if (artifact.documentId !== 'init' && messages.length > 0) {
+      mutateDocuments();
+    }
+  }, [messages, artifact.documentId, mutateDocuments]);
 
   const { mutate } = useSWRConfig();
 
@@ -346,7 +434,7 @@ function PureArtifact({
                   votes={votes}
                   messages={messages}
                   setMessages={setMessages}
-                  reload={reload}
+                  reload={enhancedReload} // Use enhancedReload instead of reload
                   isReadonly={isReadonly}
                   artifactStatus={artifact.status}
                 />
@@ -356,7 +444,7 @@ function PureArtifact({
                     chatId={chatId}
                     input={input}
                     setInput={setInput}
-                    handleSubmit={handleSubmit}
+                    handleSubmit={enhancedHandleSubmit} // Use enhancedHandleSubmit instead
                     isLoading={isLoading}
                     stop={stop}
                     attachments={attachments}

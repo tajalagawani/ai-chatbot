@@ -40,63 +40,168 @@ interface ActFlowVisualizerProps {
   status?: 'streaming' | 'idle' | 'updating' | 'error';
 }
 
-function parseIncrementalContent(content: string, previousNodes = {}) {
-  const sections: Record<string, any> = {
-    workflow: { start_node: '' },
-    nodes: { ...previousNodes },
-    edges: []
+// Original content sections structure
+interface ActContentSections {
+  workflow: {
+    workflow_id: string;
+    name: string;
+    description: string;
+    start_node: string;
+    [key: string]: any;
   };
+  parameters?: Record<string, any>;
+  nodes: Record<string, any>;
+  edges: Array<{source: string, target: string}>;
+  settings?: Record<string, any>;
+  env?: Record<string, any>;
+  [key: string]: any; // Allow for other sections we don't explicitly handle
+}
+
+function parseIncrementalContent(content: string, previousNodes = {}): ActContentSections {
+  const sections: ActContentSections = {
+    workflow: { 
+      workflow_id: '',
+      name: '',
+      description: '',
+      start_node: '' 
+    },
+    nodes: { ...previousNodes },
+    edges: [],
+    parameters: {},
+    settings: {},
+    env: {}
+  };
+  
+  // Track original structure of each node
+  const originalStructure = {};
   
   const lines = content.split('\n').map(line => line.trim());
   let currentSection = '';
+  let currentNodeId = '';
   
   for (const line of lines) {
     if (line === '' || line.startsWith('#')) continue;
 
     if (line.startsWith('[') && line.endsWith(']')) {
       currentSection = line.slice(1, -1);
+      
+      // Handle node sections
       if (currentSection.startsWith('node:')) {
-        const nodeId = currentSection.split(':')[1];
-        if (!sections.nodes[nodeId]) {
-          sections.nodes[nodeId] = {
-            id: nodeId,
-            label: nodeId,
-            position_x: sections.nodes[nodeId]?.position_x || Math.random() * 500,
-            position_y: sections.nodes[nodeId]?.position_y || Math.random() * 500,
-            node_type: 'APP NAME'
+        currentNodeId = currentSection.split(':')[1];
+        
+        // Initialize node with essential properties while preserving position if available
+        if (!sections.nodes[currentNodeId]) {
+          sections.nodes[currentNodeId] = {
+            id: currentNodeId,
+            label: currentNodeId,
+            position_x: sections.nodes[currentNodeId]?.position_x || Math.random() * 500,
+            position_y: sections.nodes[currentNodeId]?.position_y || Math.random() * 500,
+            _originalProperties: [] // Track original properties to preserve structure
+          };
+        } else if (!sections.nodes[currentNodeId]._originalProperties) {
+          // Ensure _originalProperties exists
+          sections.nodes[currentNodeId]._originalProperties = [];
+        }
+        
+        // Initialize the structure tracker for this node
+        if (!originalStructure[currentNodeId]) {
+          originalStructure[currentNodeId] = {
+            properties: [],
+            order: []
           };
         }
+      } 
+      // Initialize other sections if they don't exist
+      else if (!sections[currentSection] && currentSection !== 'workflow' && currentSection !== 'edges') {
+        sections[currentSection] = {};
       }
+      
       continue;
     }
 
     if (line.includes('=')) {
-      const [key, value] = line.split('=').map(part => part.trim());
+      const equalsIndex = line.indexOf('=');
+      const key = line.substring(0, equalsIndex).trim();
+      const value = line.substring(equalsIndex + 1).trim();
+      
       let parsedValue = value;
       
       try {
-        if (value.startsWith('{')) parsedValue = JSON.parse(value);
-        else if (value.startsWith('"')) parsedValue = value.slice(1, -1);
+        // Check if it's a template variable pattern like {{variable.property}}
+        if (value.match(/^\{\{.*\}\}$/)) {
+          // It's a template variable, keep as is
+          parsedValue = value;
+        }
+        // Check if it's JSON
+        else if (value.startsWith('{') && value.endsWith('}')) {
+          try {
+            parsedValue = JSON.parse(value);
+          } catch (jsonError) {
+            // If JSON parsing fails, keep as string
+            parsedValue = value;
+          }
+        } 
+        else if (value.startsWith('"') && value.endsWith('"')) {
+          parsedValue = value.slice(1, -1);
+        }
         else if (value === 'true') parsedValue = true;
         else if (value === 'false') parsedValue = false;
         else if (!isNaN(Number(value))) parsedValue = Number(value);
-      } catch (e) {}
+        else {
+          // Keep the value as is, including any structured content
+          parsedValue = value;
+        }
+      } catch (e) {
+        console.error(`Failed to parse value: ${value}`, e);
+        // If parsing fails, keep the original text value
+        parsedValue = value;
+      }
 
       if (currentSection.startsWith('node:')) {
         const nodeId = currentSection.split(':')[1];
+        
+        // Store the property
         sections.nodes[nodeId][key] = parsedValue;
+        
+        // Track this property as part of the original structure
+        if (!sections.nodes[nodeId]._originalProperties.includes(key)) {
+          sections.nodes[nodeId]._originalProperties.push(key);
+        }
+        
+        // Track property order and presence for reconstruction
+        if (originalStructure[nodeId]) {
+          originalStructure[nodeId].properties.push(key);
+          originalStructure[nodeId].order.push(key);
+        }
       } else if (currentSection === 'edges') {
+        // For edges, store the raw target value without modification
         sections.edges.push({
           source: key,
           target: typeof parsedValue === 'string' ? 
-            parsedValue.replace(/['"]/g, '') : 
+            parsedValue.replace(/^"(.*)"$/, '$1') : // Remove enclosing quotes if present
             String(parsedValue)
         });
       } else if (currentSection === 'workflow') {
         sections.workflow[key] = parsedValue;
+      } else if (currentSection === 'parameters') {
+        sections.parameters[key] = parsedValue;
+      } else if (currentSection === 'settings') {
+        sections.settings[key] = parsedValue;
+      } else if (currentSection === 'env') {
+        sections.env[key] = parsedValue;
+      } else if (sections[currentSection] !== undefined) {
+        // Store values for other sections
+        sections[currentSection][key] = parsedValue;
       }
     }
   }
+
+  // Store the original structure information on each node
+  Object.keys(originalStructure).forEach(nodeId => {
+    if (sections.nodes[nodeId]) {
+      sections.nodes[nodeId]._originalStructure = originalStructure[nodeId];
+    }
+  });
 
   return sections;
 }
@@ -117,54 +222,150 @@ function determineNodeKind(node: any, workflow: any): 'Input' | 'Core' | 'Output
   return 'Default';
 }
 
-function getActContentFromFlow(nodes: Node[], edges: Edge[]): string {
-  let content = '[workflow]\nstart_node=""\n\n';
+// Updated to strictly preserve original content structure
+function getActContentFromFlow(
+  nodes: Node[], 
+  edges: Edge[], 
+  originalSections: ActContentSections
+): string {
+  // Create a deep copy of the original sections to start with
+  const sections = JSON.parse(JSON.stringify(originalSections));
   
-  // Add nodes with precise position values
+  // Update node positions from the flow diagram
   nodes.forEach(node => {
-    content += `[node:${node.id}]\n`;
-    content += `label="${node.data.label || node.id}"\n`;
-    content += `node_type="${node.data.nodeType || 'default'}"\n`;
-    
-    // Use precise position values
-    content += `position_x=${node.position.x}\n`;
-    content += `position_y=${node.position.y}\n`;
-    
-    // Add any other node properties
-    if (node.data.operation) content += `operation="${node.data.operation}"\n`;
-    if (node.data.operation_name) content += `operation_name="${node.data.operation_name}"\n`;
-    if (node.data.formData && Object.keys(node.data.formData).length > 0) {
-      content += `form_data=${JSON.stringify(node.data.formData)}\n`;
-    }
-    
-    // Add all other custom properties from the node data
-    Object.entries(node.data).forEach(([key, value]) => {
-      // Skip already handled properties and internal React Flow properties
-      if (['label', 'nodeType', 'operation', 'operation_name', 'formData', '__reactFlow', 'nodeKind'].includes(key)) {
-        return;
+    if (sections.nodes[node.id]) {
+      // Only update position and label which are commonly changed in the UI
+      sections.nodes[node.id].position_x = node.position.x;
+      sections.nodes[node.id].position_y = node.position.y;
+      
+      // Only update label if it's different
+      if (node.data.label && node.data.label !== sections.nodes[node.id].label) {
+        sections.nodes[node.id].label = node.data.label;
       }
       
-      // Add the property with appropriate formatting
-      if (typeof value === 'string') {
-        content += `${key}="${value}"\n`;
-      } else if (typeof value === 'object' && value !== null) {
-        content += `${key}=${JSON.stringify(value)}\n`;
-      } else if (value !== undefined && value !== null) {
-        content += `${key}=${value}\n`;
+      // Only update type if it's different
+      if (node.data.type && node.data.type !== sections.nodes[node.id].type) {
+        sections.nodes[node.id].type = node.data.type;
       }
-    });
+    }
+  });
+  
+  // Update edges from the flow diagram
+  sections.edges = edges.map(edge => ({
+    source: edge.source,
+    target: edge.target
+  }));
+  
+  // Update workflow start_node if needed
+  const startNode = nodes.find(node => node.data.type === 'start' || node.id === 'start');
+  if (startNode && startNode.id) {
+    sections.workflow.start_node = startNode.id;
+  }
+  
+  // Generate the content string based on the original sections
+  let content = '';
+  
+  // Add parameters section if it exists
+  if (sections.parameters && Object.keys(sections.parameters).length > 0) {
+    content += '[parameters]\n';
+    for (const [key, value] of Object.entries(sections.parameters)) {
+      // Format exactly as in the original
+      if (typeof value === 'string') {
+        if (value.startsWith('${') && value.endsWith('}')) {
+          content += `${key} = ${value}\n`;
+        } else {
+          content += `${key} = "${value}"\n`;
+        }
+      } else {
+        content += `${key} = ${JSON.stringify(value)}\n`;
+      }
+    }
+    content += '\n';
+  }
+  
+  // Add workflow section
+  content += '[workflow]\n';
+  for (const [key, value] of Object.entries(sections.workflow)) {
+    if (value === undefined || value === '' || key.startsWith('_')) continue;
+    
+    if (typeof value === 'string') {
+      content += `${key} = ${value}\n`;
+    } else {
+      content += `${key} = ${JSON.stringify(value)}\n`;
+    }
+  }
+  content += '\n';
+  
+  // Add node sections
+  for (const [nodeId, nodeData] of Object.entries(sections.nodes)) {
+    content += `[node:${nodeId}]\n`;
+    
+    // Only include non-internal properties
+    Object.entries(nodeData)
+      .filter(([key]) => !key.startsWith('_'))
+      .forEach(([key, value]) => {
+        if (value === undefined || value === '') return;
+        
+        if (typeof value === 'string') {
+          if (value.startsWith('${') && value.includes('}')) {
+            content += `${key} = ${value}\n`;
+          } else if (['type', 'label', 'position_x', 'position_y', 'description',
+                       'url', 'operation', 'method', 'api_key', 'model', 
+                       'response_type', 'collection', 'timeout', 'verify_ssl',
+                       'output_format'].includes(key)) {
+            content += `${key} = ${value}\n`;
+          } else {
+            content += `${key} = ${value}\n`;
+          }
+        } else if (typeof value === 'object' && value !== null) {
+          content += `${key} = ${JSON.stringify(value)}\n`;
+        } else {
+          content += `${key} = ${value}\n`;
+        }
+      });
     
     content += '\n';
-  });
-
-  // Add edges
-  if (edges.length > 0) {
-    content += '[edges]\n';
-    edges.forEach(edge => {
-      content += `${edge.source}="${edge.target}"\n`;
-    });
   }
-
+  
+  // Add edges section
+  if (sections.edges.length > 0) {
+    content += '[edges]\n';
+    for (const edge of sections.edges) {
+      content += `${edge.source} = ${edge.target}\n`;
+    }
+    content += '\n';
+  }
+  
+  // Add settings section if exists
+  if (sections.settings && Object.keys(sections.settings).length > 0) {
+    content += '[settings]\n';
+    for (const [key, value] of Object.entries(sections.settings)) {
+      if (value === undefined || value === '') continue;
+      
+      if (typeof value === 'string') {
+        content += `${key} = ${value}\n`;
+      } else {
+        content += `${key} = ${JSON.stringify(value)}\n`;
+      }
+    }
+    content += '\n';
+  }
+  
+  // Add env section
+  if (sections.env && Object.keys(sections.env).length > 0) {
+    content += '[env]\n';
+    for (const [key, value] of Object.entries(sections.env)) {
+      if (value === undefined || value === '') continue;
+      
+      if (typeof value === 'string') {
+        content += `${key} = ${value}\n`;
+      } else {
+        content += `${key} = ${JSON.stringify(value)}\n`;
+      }
+    }
+    content += '\n';
+  }
+  
   return content;
 }
 
@@ -202,6 +403,7 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const previousNodesRef = useRef<Record<string, any>>({});
   const previousContentRef = useRef<string>('');
+  const originalSectionsRef = useRef<ActContentSections | null>(null);
   const savingNodesRef = useRef(false);
   
   // Debug info
@@ -255,7 +457,16 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       const currentNodes = reactFlowInstance ? reactFlowInstance.getNodes() : nodes;
       const currentEdges = reactFlowInstance ? reactFlowInstance.getEdges() : edges;
       
-      const updatedContent = getActContentFromFlow(currentNodes, currentEdges);
+      // Generate content but preserve original structure
+      const updatedContent = getActContentFromFlow(
+        currentNodes, 
+        currentEdges, 
+        originalSectionsRef.current || {
+          workflow: { workflow_id: '', name: '', description: '', start_node: '' },
+          nodes: {},
+          edges: []
+        }
+      );
       
       // Log the content for debugging
       console.log("Saving flow content:", updatedContent.substring(0, 100) + "...");
@@ -342,7 +553,8 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
             
             // Also update any additional properties from node.data that should be preserved
             Object.entries(node.data).forEach(([key, value]) => {
-              if (key !== 'id' && key !== 'position' && key !== '__reactFlow') {
+              if (key !== 'id' && key !== 'position' && key !== '__reactFlow' &&
+                  previousNodesRef.current[node.id]._originalProperties?.includes(key)) {
                 previousNodesRef.current[node.id][key] = value;
               }
             });
@@ -390,12 +602,10 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
         x: Math.random() * 400 + 50, 
         y: Math.random() * 400 + 50 
       },
-      data: { 
+      data: {
         label: `New Node ${nodeId}`,
-        nodeKind: 'Default',
-        nodeType: 'default',
-        workflowId: 'unknown',
-        formData: {},
+        type: 'process',  // Use a default type
+        formData: {}
       }
     };
     
@@ -409,8 +619,21 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       label: `New Node ${nodeId}`,
       position_x: newNode.position.x,
       position_y: newNode.position.y,
-      node_type: 'default'
+      type: 'process',
+      _originalProperties: ['type', 'label', 'position_x', 'position_y']
     };
+    
+    // Update original sections to include this new node
+    if (originalSectionsRef.current) {
+      originalSectionsRef.current.nodes[nodeId] = {
+        id: nodeId,
+        label: `New Node ${nodeId}`,
+        position_x: newNode.position.x,
+        position_y: newNode.position.y,
+        type: 'process',
+        _originalProperties: ['type', 'label', 'position_x', 'position_y']
+      };
+    }
     
     setHasUnsavedChanges(true);
   }, [setNodes, generateNodeId]);
@@ -431,6 +654,29 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     if (previousNodesRef.current[id]) {
       Object.entries(newData).forEach(([key, value]) => {
         previousNodesRef.current[id][key] = value;
+        
+        // Add to _originalProperties if not already there
+        if (!previousNodesRef.current[id]._originalProperties) {
+          previousNodesRef.current[id]._originalProperties = [];
+        }
+        if (!previousNodesRef.current[id]._originalProperties.includes(key)) {
+          previousNodesRef.current[id]._originalProperties.push(key);
+        }
+      });
+    }
+    
+    // Update the original sections ref for this node
+    if (originalSectionsRef.current && originalSectionsRef.current.nodes[id]) {
+      Object.entries(newData).forEach(([key, value]) => {
+        originalSectionsRef.current.nodes[id][key] = value;
+        
+        // Add to _originalProperties if not already there
+        if (!originalSectionsRef.current.nodes[id]._originalProperties) {
+          originalSectionsRef.current.nodes[id]._originalProperties = [];
+        }
+        if (!originalSectionsRef.current.nodes[id]._originalProperties.includes(key)) {
+          originalSectionsRef.current.nodes[id]._originalProperties.push(key);
+        }
       });
     }
     
@@ -449,8 +695,37 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       delete previousNodesRef.current[id];
     }
     
+    // Remove node from original sections
+    if (originalSectionsRef.current && originalSectionsRef.current.nodes[id]) {
+      delete originalSectionsRef.current.nodes[id];
+    }
+    
+    // Update edges in original sections
+    if (originalSectionsRef.current) {
+      originalSectionsRef.current.edges = originalSectionsRef.current.edges.filter(
+        edge => edge.source !== id && edge.target !== id
+      );
+    }
+    
     setHasUnsavedChanges(true);
   }, [setNodes, setEdges]);
+
+  // Add an effect that updates nodes when metadata.nodeStatus changes without reloading entire flow
+  useEffect(() => {
+    // Only run if nodes are already set up and nodeStatus changes
+    if (nodes.length === 0 || !metadata?.nodeStatus) return;
+    
+    // Update existing nodes with current status information
+    setNodes(currentNodes => 
+      currentNodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          status: metadata.nodeStatus[node.id] || null
+        }
+      }))
+    );
+  }, [metadata?.nodeStatus, setNodes]);
 
   // Initialize flow from initialLayout or content
   useEffect(() => {
@@ -468,7 +743,8 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
           label: node.data.label || node.id,
           position_x: node.position.x,
           position_y: node.position.y,
-          node_type: node.data.nodeType || 'default'
+          type: node.data.type || 'process',
+          _originalProperties: ['id', 'label', 'position_x', 'position_y', 'type']
         };
       });
       
@@ -483,8 +759,12 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     previousContentRef.current = content;
 
     try {
+      // Parse the content and store it for reference
       const workflow = parseIncrementalContent(content, previousNodesRef.current);
       previousNodesRef.current = workflow.nodes;
+      
+      // Store original parsed sections for later reference when saving
+      originalSectionsRef.current = workflow;
       
       const flowNodes = Object.entries(workflow.nodes).map(([id, node]: [string, any]): Node => ({
         id,
@@ -494,13 +774,17 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
           y: typeof node.position_y === 'number' ? node.position_y : 0 
         },
         data: { 
+          // First, include ALL node properties in data
+          ...node,
+          // Then add node status information if available
+          status: metadata?.nodeStatus && metadata.nodeStatus[id],
+          // Override specific properties that need special handling
           label: node.label || id,
-          operation: node.operation,
-          operation_name: node.operation_name,
           nodeKind: determineNodeKind({id, ...node}, workflow),
-          nodeType: node.node_type || 'default',
-          workflowId: workflow.workflow?.id || 'unknown',
-          formData: node.form_data || {},
+          type: node.type || 'process',
+          // Include these property lists for structure preservation
+          _originalProperties: node._originalProperties || [],
+          _originalStructure: node._originalStructure || null
         }
       }));
 
@@ -511,7 +795,7 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
         type: 'custom',
         data: {
           isBackward: parseInt(edge.target.split('-')[1] || '0') < 
-                      parseInt(edge.source.split('-')[1] || '0')
+                    parseInt(edge.source.split('-')[1] || '0')
         }
       }));
 
@@ -537,18 +821,19 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       console.error('Failed to parse ACT content:', error);
       toast.error('Failed to parse workflow content');
     }
-  }, [content, initialLayout, setNodes, setEdges, reactFlowInstance]);
+  }, [content, initialLayout, setNodes, setEdges, reactFlowInstance, metadata?.nodeStatus]);
 
   const nodeTypes = useMemo<NodeTypes>(() => ({
-  baseNode: (props: any) => (
-    <BaseNode
-      {...props}
-      icon={<Box />}
-      onNodeDataChange={handleNodeDataChange}
-      onNodeDelete={handleNodeDelete}
-    />
-  ),
-}), [handleNodeDataChange, handleNodeDelete]);
+    baseNode: (props: any) => (
+      <BaseNode
+        {...props}
+        icon={<Box />}
+        onNodeDataChange={handleNodeDataChange}
+        onNodeDelete={handleNodeDelete}
+      />
+    ),
+  }), [handleNodeDataChange, handleNodeDelete]);
+
   // Memoize edge types
   const edgeTypes = useMemo<EdgeTypes>(() => ({
     custom: CustomEdge,
@@ -578,12 +863,37 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
         snapToGrid={true}
         snapGrid={[15, 15]}
       >
-        <Background />
+       <Background
+  color="#5b5b5b"
+  gap={20}
+  
+  style={{ backgroundColor: '#09090b' }}
+/>
         <Controls />
         <MiniMap 
           zoomable 
           pannable
           nodeColor={node => {
+            // First check if we have status info for this node
+            const nodeStatusInfo = metadata?.nodeStatus && metadata.nodeStatus[node.id];
+            
+            if (nodeStatusInfo) {
+              // Use status-based coloring
+              switch (nodeStatusInfo.status) {
+                case 'completed':
+                  return '#86efac'; // Green for completed
+                case 'failed':
+                  return '#f87171'; // Red for failed
+                case 'pending':
+                  return '#93c5fd'; // Light blue for pending
+                case 'in_progress':
+                  return '#fcd34d'; // Yellow for in progress
+                default:
+                  return '#e5e7eb'; // Default gray
+              }
+            }
+            
+            // Fall back to kind-based coloring
             switch (node.data?.nodeKind) {
               case 'Input': return '#93c5fd';
               case 'Output': return '#86efac';
@@ -638,6 +948,31 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       {hasUnsavedChanges && status !== 'updating' && (
         <div className="absolute top-4 right-4 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1 rounded-md text-sm flex items-center z-10">
           <span>Unsaved changes</span>
+        </div>
+      )}
+      
+      {/* Status Legend (only show when there are node statuses) */}
+      {metadata?.nodeStatus && Object.keys(metadata.nodeStatus).length > 0 && (
+        <div className="absolute bottom-4 left-4 bg-white border border-slate-200 rounded-md shadow-sm p-2 z-10">
+          <div className="text-xs font-semibold mb-1">Node Status</div>
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 text-xs">
+              <div className="w-3 h-3 rounded-full bg-green-400"></div>
+              <span>Completed</span>
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <div className="w-3 h-3 rounded-full bg-red-400"></div>
+              <span>Failed</span>
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+              <span>In Progress</span>
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <div className="w-3 h-3 rounded-full bg-blue-400"></div>
+              <span>Pending</span>
+            </div>
+          </div>
         </div>
       )}
     </div>

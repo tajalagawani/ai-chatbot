@@ -5,52 +5,111 @@ import { createDocumentHandler } from '@/lib/artifacts/server';
 
 // ACT Workflow Structure and Guidelines
 const ACT_STRUCTURE_PROMPT = `
-WORKFLOW ACT STRUCTURE
+AUTONOMOUS AGENT SYSTEM STRUCTURE
 ====================
-1. Include at least 10 to 15 nodes or more IF needed to represent a comprehensive workflow based on the description.
-2. Use various node shapes to represent different types of steps (e.g., rectangles for processes, diamonds for decisions).
-3. Include detailed labels for each node and edge.
-4. Represent complex logic with multiple paths and decision points.
-5. Include any loops or repetitions in the process.
-6. Add annotations or subgraphs if appropriate to group related steps.
-7. Follow a clear and logical flow from start to finish.
-8. When we need to use an API, specify the API name and the method to use.
-9. Each node represents a specific operation or decision in the workflow.
-10. Incorporate conditional statements (if/elif) for making decisions based on project type or AI recommendations.
-11. Include loops (for) for iterating through recommended tools or document structures.
-12. Implement error handling to manage exceptions and retry failed steps.
+1. Include at least 10 to 15 agent nodes or more IF needed to represent a comprehensive autonomous system based on the description.
+2. Use various node shapes to represent different types of autonomous agents (e.g., rectangles for processing agents, diamonds for decision-making agents).
+3. Include highly detailed labels for each agent node. Each label must explain:
+   - WHAT the agent does in specific terms
+   - WHY this agent is necessary in the system
+   - HOW the agent processes its inputs
+   - WHAT outputs the agent produces
+   - Any SPECIAL CONDITIONS the agent handles
+4. Represent complex agent logic with multiple decision paths and autonomous reasoning points.
+5. Include any feedback loops or iterative processing where agents may repeatedly perform tasks.
+6. Add annotations or subgraphs if appropriate to group related autonomous agents.
+7. Follow a clear and logical flow from initiating agent to completion agents.
+8. When an agent needs to interact with an external API, specify the API name and the exact method to use.
+9. Each agent node represents a specific autonomous operation or decision in the system.
+10. Incorporate conditional reasoning agents (if/elif) for making autonomous decisions based on project type or AI recommendations.
+11. Include iteration agents (for) for autonomously processing through recommended tools or document structures.
+12. Implement error recovery agents to autonomously manage exceptions and retry failed operations.
 
 REQUIRED SECTIONS
 -------------------
 [workflow]
 workflow_id = "\${EXISTING_ID}"    # Must preserve existing ID
-name = "Workflow Name"            # Required workflow name
-description = "Description"       # Required workflow description
-start_node = "StartNodeID"        # Required: First node in execution chain
+name = "Agent System Name"        # Required system name
+description = "Description"       # Required system description
+start_node = "StartNodeID"        # Required: First agent in execution chain
 
-NODE DEFINITIONS
+
+Reference Agent Types:
+√SwitchNode - Autonomous routing agent that directs based on matching a value to different cases
+BranchNode - Decision-making agent that routes execution along different paths based on conditions
+MergeNode - Integration agent that combines outputs from multiple autonomous processing branches
+SequenceNode - Orchestration agent that coordinates a series of operations in order
+ParallelNode - Concurrent processing agent that executes multiple operations simultaneously
+LoopNode - Repetition agent that continues execution until a condition is met
+ForEachNode - Collection processing agent that applies an operation to each item in a collection
+MapNode - Transformation agent that processes each element in a collection independently
+FilterNode - Selection agent that identifies and extracts elements matching specific criteria
+ReduceNode - Aggregation agent that combines values from a collection into a single result
+TryCatchNode - Resilience agent that handles errors with fallback execution paths
+RetryNode - Persistence agent that reattempts an operation with backoff strategies
+ThrottleNode - Rate-limiting agent that controls execution frequency
+DelayNode - Timing agent that introduces deliberate pauses in execution
+TimeoutNode - Monitoring agent that enforces maximum execution times
+QueueNode - Prioritization agent that manages execution order based on importance
+DependencyNode - Coordination agent that executes based on prerequisites being satisfied
+SemaphoreNode - Resource management agent that controls access to limited resources
+ObserverNode - Monitoring agent that watches for changes and triggers responses
+PublishSubscribeNode - Communication agent that implements pub/sub pattern for event distribution
+AggregatorNode - Collection agent that combines multiple values into structured data
+JoinNode - Synchronization agent that aligns multiple execution paths
+SplitNode - Distribution agent that divides execution into multiple parallel paths
+ValidatorNode - Quality assurance agent that verifies data meets required conditions
+TransformerNode - Conversion agent that transforms data between formats
+RouterNode - Intelligent routing agent that directs data based on complex rules
+GatewayNode - Access control agent that governs passage of data based on conditions
+ForkNode - Replication agent that creates multiple copies of the same execution path
+SynchronizerNode - Timing coordination agent that ensures operations happen in sequence
+StateNode - Context management agent that tracks and transitions between different states
+RuleEngineNode - Policy enforcement agent that processes complex rule sets against data
+DecisionTreeNode - Hierarchical reasoning agent that makes decisions based on structured conditions
+PipelineNode - Process management agent that organizes operations into sequential stages
+CompositeNode - Meta-agent that groups multiple specialized agents into a single logical unit
+PriorityNode - Judgment agent that executes branches based on importance
+InterruptNode - Control agent that halts execution based on specific conditions
+ConditionalLoopNode - Adaptive iteration agent with custom entry and exit conditions
+GroupByNode - Classification agent that organizes data into groups based on key attributes
+SortNode - Ordering agent that arranges elements according to specified criteria
+LimitNode - Constraint agent that restricts the number of items processed
+BatchNode - Efficient processing agent that handles items in fixed-size groups
+WindowNode - Time-aware agent that processes items in sliding time windows
+DebounceNode - Efficiency agent that prevents duplicate processing within a time window
+CorrelationNode - Pattern-matching agent that identifies related events or data
+PredicateNode - Logical evaluation agent that assesses complex expressions
+TokenBucketNode - Flow control agent that rate limits operations
+CircuitBreakerNode - Protective agent that prevents operations when failure rate is high
+AnyNode - Outcome agent that succeeds if any child agent succeeds
+AllNode - Consensus agent that succeeds if all child agents succeed
+CascadeNode - Fallback agent that attempts operations in sequence until one succeeds
+
+
+AGENT NODE DEFINITIONS
 -----------------
 [node:\${NODE_ID}]
-type = "\${NODE_TYPE}"           # Required: Node type (e.g., "start", "process", "end")
-label = "\${LABEL}"              # Required: Display label
+type = "\${NODE_TYPE}"           # Required: Agent type (e.g., "ValidatorNode", "LimitNode", "GroupByNode", "SlackNode", "GitHubNode")
+label = "\${DETAILED_LABEL}"     # Required: Comprehensive explanation of the agent's purpose, inputs, processing logic, and outputs
 position_x = \${X}               # Required: X position
 position_y = \${Y}               # Required: Y position
-operation = "\${OP}"             # Required: Operation to perform
-app_name = "\${APP_NAME}"        # Required: Application name (e.g., "GitHub", "Slack")
-operation_name = "\${OP_NAME}"   # Required: Operation name
-params = \${PARAMS}              # Required: Operation parameters
+operation = "\${OP}"             # Required: Operation the agent performs
+app_name = "\${APP_NAME}"        # Required: Application name (e.g., "GitHub", "Slack") if API is used, otherwise "logic" for system agents
+operation_name = "\${OP_NAME}"   # Required: Specific operation name
+params = \${PARAMS}              # Required: Operation parameters and configuration
 mode = "UC"                      # Required: Mode (usually "UC")
 
-Additional node parameters:
-- api_key = "\${API_KEY}"        # Optional: API key if needed
-- slack_token = "\${TOKEN}"      # Optional: Slack token if needed
-- method = "\${METHOD}"          # Optional: HTTP method if needed
-- formData = \${FORM_DATA}       # Optional: Form data if needed
+Additional agent parameters:
+- api_key = "\${API_KEY}"        # Optional: API key if needed for external service access
+- slack_token = "\${TOKEN}"      # Optional: Slack token if needed for communication
+- method = "\${METHOD}"          # Optional: HTTP method if agent performs web requests
+- formData = \${FORM_DATA}       # Optional: Form data if agent submits structured information
 
-EDGE CONNECTIONS
+AGENT CONNECTIONS
 -----------------
 [edges]
-source_node = target_node
+source_agent = target_agent
 
 ENVIRONMENT VARIABLES
 -------------------
@@ -60,10 +119,11 @@ VARIABLE_NAME = \${VALUE}
 CRITICAL RULES
 ============
 1. Data Integrity: Ensure all required fields are present and properly formatted
-2. Node Types: Each node MUST have a 'type' field
-3. App Names: Each node MUST have an 'app_name' field
-4. Data Flow: Validate edge connections between nodes
+2. Agent Types: Each agent node MUST have a 'type' 
+3. App Names: Each agent node MUST have an 'app_name' field
+4. Data Flow: Validate edge connections between autonomous agents
 5. Response Format: Follow exact INI format structure
+6. Label Detail: Every agent must have a detailed, comprehensive label explaining its purpose, function, and role
 
 EDGES RULES
 ============
@@ -74,7 +134,7 @@ EDGES RULES
    INCORRECT: source_node = target_node
    CORRECT: start = get_pr_details
 
-3. All edge connections must reference actual node IDs defined in the workflow
+3. All edge connections must reference actual agent node IDs defined in the system
 4. Each edge must be on its own line under the [edges] section
 5. Ensure all edge connections are valid and logical
 NAMING CONVENTIONS
@@ -87,20 +147,20 @@ NAMING CONVENTIONS
 
 LAYOUT ALGORITHM REQUIREMENTS
 ============================
-1. Position nodes in a logical flow-chart pattern from top to bottom and left to right
-2. Each node has a size of 130x130 pixels
-3. Start node should be positioned at the top (lowest y value)
-4. End node should be positioned at the bottom (highest y value)
-5. Maintain a minimum horizontal spacing of 250 pixels between node centers (220 pixels clear space)
-6. Maintain a minimum vertical spacing of 200 pixels between node centers (270 pixels clear space)
-7. Position nodes based on their logical sequence in the workflow
-8. Decision nodes should have their conditional paths positioned appropriately:
+1. Position agent nodes in a logical flow-chart pattern from top to bottom and left to right
+2. Each agent node has a size of 130x130 pixels
+3. Start agent should be positioned at the top (lowest y value)
+4. End agent should be positioned at the bottom (highest y value)
+5. Maintain a minimum horizontal spacing of 250 pixels between agent node centers (220 pixels clear space)
+6. Maintain a minimum vertical spacing of 200 pixels between agent node centers (270 pixels clear space)
+7. Position agent nodes based on their logical sequence in the autonomous system
+8. Decision agent nodes should have their conditional paths positioned appropriately:
    - "Yes" or "True" paths should flow downward or to the right
    - "No" or "False" paths should flow to a different direction
-9. Group related nodes by positioning them in proximity to each other 200 pixels apart
-10. Error handler nodes should be positioned at the bottom of the diagram
+9. Group related agent nodes by positioning them in proximity to each other 200 pixels apart
+10. Error handler agent nodes should be positioned at the bottom of the diagram
 11. All coordinates must be positive integers
-12. Sequential nodes should form clear paths without overlapping
+12. Sequential agent nodes should form clear paths without overlapping
 
 `
 
@@ -119,18 +179,20 @@ DO NOT UPDATE DOCUMENTS IMMEDIATELY AFTER CREATING THEM. WAIT FOR USER FEEDBACK 
 // Combined system prompts
 const SYSTEM_PROMPTS = {
   create: `${ACT_STRUCTURE_PROMPT}\n\n${ARTIFACTS_PROMPT}\n\nAdditional Create Guidelines:
-1. Always generate complete, valid ACT configurations
-2. Include comprehensive error handling
+1. Always generate complete, valid autonomous agent configurations
+2. Include comprehensive error recovery mechanisms
 3. Follow naming conventions strictly
-4. Position nodes logically
-5. Ensure proper edge connections`,
+4. Position agent nodes logically
+5. Ensure proper agent connections
+6. Provide highly detailed labels for each agent that explain WHAT it does, WHY it's needed, and HOW it processes information`,
 
   update: `${ACT_STRUCTURE_PROMPT}\n\n${ARTIFACTS_PROMPT}\n\nAdditional Update Guidelines:
 1. Preserve existing workflow_id
-2. Maintain structure integrity
-3. Keep existing node connections valid
-4. Update only necessary sections
-5. Validate all changes`
+2. Maintain autonomous system integrity
+3. Keep existing agent connections valid
+4. Update only necessary agent configurations
+5. Validate all changes
+6. Enhance agent labels with detailed explanations of purpose and function`
 };
 
 // Schema definitions
@@ -450,12 +512,12 @@ class ActValidator {
 function generateBaseTemplate(title: string): string {
   return `[workflow]
 name = "${title}"
-description = "Workflow for ${title}"
+description = "Autonomous Agent System for ${title}"
 start_node = "start"
 
 [node:start]
 type = "start"
-label = "Start Process"
+label = "Initiating Agent: Begins the process by setting up necessary context and preparing the system for execution. This agent validates initial parameters and constructs the execution environment before dispatching control to subsequent agents."
 position_x = 100
 position_y = 100
 operation = "start"
@@ -466,7 +528,7 @@ mode = "UC"
 
 [node:end]
 type = "end"
-label = "End Process"
+label = "Termination Agent: Finalizes all processing, ensures all resources are properly closed, and reports completion status. This agent verifies that all necessary actions have been completed successfully before concluding the workflow execution."
 position_x = 1200
 position_y = 600
 operation = "end"
@@ -477,9 +539,9 @@ mode = "UC"
 
 [node:error_handler]
 type = "error"
-label = "Error Handler"
+label = "Recovery Agent: Captures and processes exceptions throughout the system, determines appropriate recovery strategies, logs detailed error information, and attempts remediation where possible. This agent ensures system resilience by providing intelligent error management."
 position_x = 800
-position_y =400
+position_y = 400
 operation = "error"
 app_name = "System"
 operation_name = "handleError"
@@ -518,13 +580,18 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
       const { fullStream } = await streamObject({
         model: myProvider.languageModel('artifact-model'),
         system: SYSTEM_PROMPTS.create,
-        prompt: `Extend this base workflow configuration for: ${title}
+        prompt: `Extend this base autonomous agent system configuration for: ${title}
                 Requirements:
-                1. Add all necessary workflow-specific nodes
-                2. Ensure proper error handling connections
-                3. Maintain valid edge connections
+                1. Add all necessary specialized agent nodes with HIGHLY DETAILED labels explaining:
+                   - WHAT each agent does in specific terms
+                   - WHY this agent is necessary in the system
+                   - HOW the agent processes its inputs
+                   - WHAT outputs the agent produces
+                   - Any SPECIAL CONDITIONS the agent handles
+                2. Ensure proper error recovery connections
+                3. Maintain valid agent connections
                 4. Include relevant environment variables
-                5. Position nodes logically
+                5. Position agent nodes logically
                 
                 Base configuration:
                 ${baseContent}`,
@@ -587,18 +654,24 @@ onUpdateDocument: async ({ document, description, dataStream }) => {
       const { fullStream } = await streamObject({
         model: myProvider.languageModel('artifact-model'),
         system: SYSTEM_PROMPTS.update,
-        prompt: `Current configuration:\n${document.content}\n\nUpdate request: ${description}\n
+        prompt: `Current autonomous agent system configuration:\n${document.content}\n\nUpdate request: ${description}\n
                 Requirements:
-                1. Preserve existing workflow structure
-                2. Maintain all valid edge connections
-                3. Keep error handling intact
-                4. Update only necessary sections
-                5. Ensure all changes are valid`,
+                1. Preserve existing agent system structure
+                2. Maintain all valid agent connections
+                3. Keep error recovery mechanisms intact
+                4. Update only necessary agent configurations
+                5. Ensure all changes are valid
+                6. Enhance agent labels with comprehensive details about:
+                   - WHAT each agent does
+                   - WHY the agent is necessary
+                   - HOW the agent processes information
+                   - WHAT outputs or decisions the agent produces
+                   - Any SPECIAL CONDITIONS or SCENARIOS the agent handles`,
         schema: z.object({
           content: z.string(),
         }),
-        maxTokens: 4000,
-        temperature: 0.7
+        maxTokens: 80000,
+        temperature: 0
       });
 
       let lastValidContent = document.content;

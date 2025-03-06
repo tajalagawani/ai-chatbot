@@ -72,7 +72,7 @@ export default function CustomEdge({
   const isBackward = parseInt(target.split('-')[1]) < parseInt(source.split('-')[1]);
 
   const edgeStyle = {
-    strokeWidth: 2,
+    strokeWidth: 4,
     stroke: isBackward ? '#7f8185' : '#7f8185',
     strokeDasharray: selected ? '4, 4' : 'none',
     animation: selected ? 'dash-animation 1s linear infinite' : 'none',
@@ -120,7 +120,7 @@ export default function CustomEdge({
         cx={sourceX}
         cy={sourceY}
         fill="#fff"
-        r={2.5}
+        r={3}
         stroke={edgeStyle.stroke}
         strokeWidth={1}
       />
@@ -128,7 +128,7 @@ export default function CustomEdge({
         cx={targetX}
         cy={targetY}
         fill="#fff"
-        r={2.5}
+        r={3}
         stroke={edgeStyle.stroke}
         strokeWidth={1}
       />

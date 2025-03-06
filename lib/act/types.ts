@@ -29,7 +29,7 @@ export interface ActNode {
   position_x: number;
   position_y: number;
   operation: string;
-  node_type: 'APP NAME';
+  node_type: 'string';
   operation_name: string;
   params: Record<string, any>;
   mode: string;

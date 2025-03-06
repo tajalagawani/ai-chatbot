@@ -17,13 +17,12 @@ export function CodeBlock({
   if (!inline) {
     return (
       <div className="not-prose flex flex-col">
-        <div
+        <pre
+          {...props}
           className={`text-sm w-full overflow-x-auto dark:bg-zinc-700 p-4 border border-zinc-200 dark:border-zinc-700 rounded-xl dark:text-zinc-50 text-zinc-700`}
         >
-          <pre {...props}>
-            <code className="whitespace-pre-wrap break-words">{children}</code>
-          </pre>
-        </div>
+          <code className="whitespace-pre-wrap break-words">{children}</code>
+        </pre>
       </div>
     );
   } else {

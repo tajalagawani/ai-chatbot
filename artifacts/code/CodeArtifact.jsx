@@ -29,7 +29,23 @@ const codeArtifact = {
     console.log('Generated artifact ID:', newArtifactId);
   
     try {
-      const isDockerHealthy = await dockerService.checkHealth();
+      // Check if dockerService is properly imported and has the expected methods
+      console.log('Docker service:', dockerService);
+      
+      // Instead of calling checkHealth directly, check if it exists first
+      // and provide a fallback if it doesn't
+      let isDockerHealthy = false;
+      
+      if (dockerService && typeof dockerService.checkHealth === 'function') {
+        isDockerHealthy = await dockerService.checkHealth();
+      } else if (dockerService && typeof dockerService.isHealthy === 'function') {
+        // Try an alternative method name that might exist
+        isDockerHealthy = await dockerService.isHealthy();
+      } else {
+        // If no health check method exists, default to false
+        console.warn('Docker service health check method not found. Assuming Docker is unavailable.');
+      }
+      
       console.log('Docker health status:', isDockerHealthy);
       
       const metadata = {
@@ -46,8 +62,10 @@ const codeArtifact = {
         showFlowOption: true,
         isFlowFullscreen: false,
         isStreaming: false, // Add isStreaming flag to metadata
+        nodeStatus: {}, // Add nodeStatus to store workflow execution status
         outputs: [{
           id: generateUUID(),
+          timestamp: new Date().toISOString(),
           contents: [{
             type: 'text',
             value: `> Docker status: ${isDockerHealthy ? 'ready' : 'unavailable'}`
@@ -82,8 +100,10 @@ const codeArtifact = {
         showFlowOption: true,
         isFlowFullscreen: false,
         isStreaming: false,
+        nodeStatus: {},
         outputs: [{
           id: generateUUID(),
+          timestamp: new Date().toISOString(),
           contents: [{
             type: 'text',
             value: `> Initialization error: ${errorMessage}`
@@ -242,6 +262,52 @@ const codeArtifact = {
       });
     }, [setMetadata, flowContentUpdated]);
 
+    // Extract node status from execution results
+    useEffect(() => {
+      if (metadata?.outputs && metadata.outputs.length > 0) {
+        // Look through outputs for execution results with node status information
+        const executionOutputs = metadata.outputs.filter(output => 
+          output.contents.some(content => 
+            content.value.includes('Execution completed:') || 
+            content.value.includes('Execution failed:')
+          )
+        );
+        
+        if (executionOutputs.length > 0) {
+          const latestOutput = executionOutputs[executionOutputs.length - 1];
+          
+          try {
+            // Find content with execution result
+            const resultContent = latestOutput.contents.find(content => 
+              content.value.includes('Execution completed:') || 
+              content.value.includes('Execution failed:')
+            );
+            
+            if (resultContent) {
+              // Extract JSON from the content
+              const jsonStart = resultContent.value.indexOf('{');
+              if (jsonStart !== -1) {
+                const jsonString = resultContent.value.substring(jsonStart);
+                const executionResult = JSON.parse(jsonString);
+                
+                if (executionResult.result && executionResult.result.node_status) {
+                  // Update metadata with node status
+                  setMetadata(prev => ({
+                    ...prev,
+                    nodeStatus: executionResult.result.node_status
+                  }));
+                  
+                  console.log('Updated node status in metadata:', executionResult.result.node_status);
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Error extracting node status:', error);
+          }
+        }
+      }
+    }, [metadata?.outputs, setMetadata]);
+
     // Monitor execution status
     useEffect(() => {
       if (!metadata?.executionId || !metadata?.port) return;
@@ -265,6 +331,7 @@ const codeArtifact = {
               ...(prev.outputs || []),
               {
                 id: generateUUID(),
+                timestamp: new Date().toISOString(),
                 contents: [{
                   type: 'text',
                   value: `> Execution status: ${data.status}${data.message ? ` - ${data.message}` : ''}`
@@ -284,6 +351,7 @@ const codeArtifact = {
                 ...(prev.outputs || []),
                 {
                   id: generateUUID(),
+                  timestamp: new Date().toISOString(),
                   contents: [{
                     type: 'text',
                     value: data.status === 'completed' 
@@ -294,6 +362,15 @@ const codeArtifact = {
                 }
               ]
             }));
+
+            // If execution returned node status information, update metadata
+            if (data.result && data.result.node_status) {
+              setMetadata(prev => ({
+                ...prev,
+                nodeStatus: data.result.node_status
+              }));
+              console.log('Updated node status from execution:', data.result.node_status);
+            }
 
             setIsExecuting(false);
             toast(data.status === 'completed' ? 'Execution completed' : 'Execution failed');
@@ -310,6 +387,7 @@ const codeArtifact = {
               ...(prev.outputs || []),
               {
                 id: generateUUID(),
+                timestamp: new Date().toISOString(),
                 contents: [{
                   type: 'text',
                   value: `> Error checking status: ${errorMessage}`
@@ -460,7 +538,7 @@ const codeArtifact = {
             <ActFlowVisualizer 
               content={content}
               isStreaming={metadata?.status === 'streaming'}
-              metadata={metadata}
+              metadata={metadata} // This contains nodeStatus from the effect above
               setMetadata={setMetadata}
               onContentChange={handleFlowContentChange}
               status={metadata?.status}

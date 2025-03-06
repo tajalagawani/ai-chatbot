@@ -2,13 +2,8 @@ import React, { memo, FC, useState, useEffect, useCallback, useMemo } from 'reac
 import { Handle, Position, NodeProps, Node, Edge } from 'reactflow';
 import { useTheme } from 'next-themes';
 import { Card } from '@/components/ui/card';
-import { Box } from 'lucide-react';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '@/components/ui/sheet';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Box, Loader2, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import DraggablePanels from './panelsModal'; // Import DraggablePanels instead of NodeSettingsSheet
 import './BaseNode.css';
 
 interface BaseNodeProps extends NodeProps {
@@ -42,15 +37,58 @@ const BaseNode: FC<BaseNodeProps> = memo(({
   allEdges,
 }) => {
   // State management
-  const [isSheetOpen, setIsSheetOpen] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [logMessage, setLogMessage] = useState('No execution response yet');
   const [nodeStatus, setNodeStatus] = useState('Staging');
   const [iconSrc, setIconSrc] = useState<string | null>(null);
+  const [showErrorTooltip, setShowErrorTooltip] = useState(false);
   const { theme, systemTheme } = useTheme();
 
   // Derived state
   const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
   const isUCMode = data?.formData?.mode === 'UC';
+  
+  // Check if node is currently executing
+  const isExecuting = data?.executionStatus === 'executing';
+
+  // Get the node status from data if available
+  const executionStatus = data?.status?.status || null;
+  
+  // Extract error message from execution response if available
+  const errorMessage = useMemo(() => {
+    if (!data.executionResponse) return null;
+    
+    // Direct error in the execution response
+    if (data.executionResponse?.error) {
+      return data.executionResponse.error.message || String(data.executionResponse.error);
+    }
+    
+    // Error in result object
+    if (data.executionResponse?.result?.status === 'error') {
+      return data.executionResponse.result.message || 'An error occurred during execution';
+    }
+    
+    // Error in specific node results (like the claude_analysis example)
+    if (data.executionResponse?.result?.results && data.id in data.executionResponse.result.results) {
+      const nodeResult = data.executionResponse.result.results[data.id];
+      if (nodeResult?.error) {
+        return nodeResult.error;
+      }
+      if (nodeResult?.status === 'error') {
+        return nodeResult.message || 'Node execution failed';
+      }
+    }
+    
+    // Check node_status for error messages
+    if (data.executionResponse?.result?.node_status && data.id in data.executionResponse.result.node_status) {
+      const nodeStatus = data.executionResponse.result.node_status[data.id];
+      if (nodeStatus?.status === 'failed') {
+        return nodeStatus.message || 'Node execution failed';
+      }
+    }
+    
+    return null;
+  }, [data.executionResponse, data.id]);
 
   // Memoized values
   const connectedInputNodes = useMemo(() => {
@@ -69,15 +107,84 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     return {};
   }, [data.executionResponse]);
 
+  // Get status icon based on execution status
+  const getStatusIcon = useCallback(() => {
+    if (!executionStatus) return null;
+    
+    switch (executionStatus) {
+      case 'completed':
+        return (
+          <div className="status-icon">
+            <CheckCircle className="h-4 w-4 status-icon-completed" />
+          </div>
+        );
+      case 'failed':
+        return (
+          <div 
+            className="status-icon error-status-icon"
+            title={errorMessage || "Execution failed"}
+          >
+            <AlertCircle className="h-4 w-4 status-icon-failed" />
+          </div>
+        );
+      case 'pending':
+        return (
+          <div className="status-icon">
+            <Clock className="h-4 w-4 status-icon-pending" />
+          </div>
+        );
+      case 'in_progress':
+        return (
+          <div className="status-icon">
+            <Clock className="h-4 w-4 status-icon-in-progress" />
+          </div>
+        );
+      default:
+        return null;
+    }
+  }, [executionStatus, errorMessage]);
+
   // Node style calculations
   const getNodeBorderStyle = useCallback((
     nodeKind: string,
     status: string,
     selected: boolean,
-    isUCMode: boolean
+    isUCMode: boolean,
+    isExecuting: boolean,
+    executionStatus: string | null
   ) => {
     if (isUCMode) return {};
 
+    // If node is executing, return an amber highlight
+    if (isExecuting) {
+      return {
+        border: '1px solid rgb(245, 158, 11)',
+        boxShadow: '0 0 0 5px rgba(245, 158, 11, 0.3)'
+      };
+    }
+
+    // If we have execution status, use that for styling
+    if (executionStatus) {
+      const baseStyle = { border: '0.5px solid' };
+      const styleWithShadow = (borderColor: string, shadowColor: string) => ({
+        ...baseStyle,
+        borderColor,
+        boxShadow: `0 0 0 ${selected ? '4px' : '2px'} ${shadowColor}`
+      });
+
+      switch (executionStatus) {
+        case 'completed':
+          return styleWithShadow('#10b981', 'rgba(16, 185, 129, 0.3)'); // Green
+        case 'failed':
+          return styleWithShadow('#ef4444', 'rgba(239, 68, 68, 0.3)'); // Red
+        case 'pending':
+          return styleWithShadow('#3b82f6', 'rgba(59, 130, 246, 0.3)'); // Blue
+        case 'in_progress':
+          return styleWithShadow('#f59e0b', 'rgba(245, 158, 11, 0.3)'); // Amber
+      }
+    }
+
+    // Fall back to original styling if no execution status
     const baseStyle = { border: '1px solid rgb(40, 42, 41)' };
     const styleWithShadow = (color: string) => ({
       ...baseStyle,
@@ -123,23 +230,6 @@ const BaseNode: FC<BaseNodeProps> = memo(({
   }), [handleStyle]);
 
   // Effects
-  // useEffect(() => {
-  //   const fetchIcon = async () => {
-  //     try {
-  //       const response = await fetch(`http://127.0.0.1:5009/api/node_icons/${nodeType}`);
-  //       if (response.ok) {
-  //         const data = await response.json();
-  //         setIconSrc(data.icon);
-  //       }
-  //     } catch (error) {
-  //       console.error(`Error fetching icon for ${nodeType}:`, error);
-  //       setIconSrc(null);
-  //     }
-  //   };
-
-  //   fetchIcon();
-  // }, [nodeType]);
-
   useEffect(() => {
     if (data.executionResponse) {
       let message: string;
@@ -157,14 +247,68 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     }
   }, [data.executionResponse]);
 
+  // Update log message with detailed response data for all nodes
+  useEffect(() => {
+    // First priority: Show detailed error message if available
+    if (errorMessage) {
+      setLogMessage(`Error: ${errorMessage}`);
+      return;
+    }
+    
+    // Second priority: Show execution response details if available
+    if (data.executionResponse) {
+      let detailedMessage = '';
+      
+      // Handle different response formats
+      if (typeof data.executionResponse === 'string') {
+        detailedMessage = data.executionResponse;
+      } else if (typeof data.executionResponse === 'object') {
+        // Get node-specific results from the execution response
+        if (data.executionResponse?.result?.results && data.id in data.executionResponse.result.results) {
+          const nodeResult = data.executionResponse.result.results[data.id];
+          
+          // Display different details based on the type of node
+          if (nodeResult?.result?.choices?.[0]?.message?.content) {
+            // For AI nodes like OpenAI, show the generated content
+            detailedMessage = nodeResult.result.choices[0].message.content;
+          } else if (nodeResult?.body) {
+            // For API request nodes, show a summary of the response
+            detailedMessage = `Response: ${JSON.stringify(nodeResult.body).substring(0, 150)}...`;
+          } else if (nodeResult?.status) {
+            // For other nodes with status info
+            detailedMessage = `Status: ${nodeResult.status}${nodeResult.error ? ` - Error: ${nodeResult.error}` : ''}`;
+          } else {
+            // Fallback: stringify the full result
+            detailedMessage = JSON.stringify(nodeResult).substring(0, 150) + '...';
+          }
+        } else {
+          // If no node-specific results, use the status message if available
+          detailedMessage = data?.status?.message || JSON.stringify(data.executionResponse).substring(0, 150) + '...';
+        }
+      }
+      
+      setLogMessage(detailedMessage);
+      return;
+    }
+    
+    // Third priority: Show status message if available
+    if (data?.status?.message) {
+      setLogMessage(data.status.message);
+      return;
+    }
+    
+    // Default message if nothing else is available
+    setLogMessage('No execution response yet');
+  }, [data.executionResponse, data?.status, data.id, errorMessage]);
+
   // Event handlers
   const handleDoubleClick = useCallback((event: React.MouseEvent) => {
     event.stopPropagation();
-    setIsSheetOpen(true);
+    setIsModalOpen(true);
   }, []);
 
-  const handleSheetClose = useCallback(() => {
-    setIsSheetOpen(false);
+  const handleModalClose = useCallback(() => {
+    setIsModalOpen(false);
   }, []);
 
   const handleNodeSave = useCallback((formData: any) => {
@@ -172,8 +316,25 @@ const BaseNode: FC<BaseNodeProps> = memo(({
       ...data,
       ...formData
     });
-    setIsSheetOpen(false);
   }, [id, data, onNodeDataChange]);
+
+  // Get the background color based on execution status
+  const getNodeBackgroundClass = () => {
+    if (!executionStatus) return '';
+    
+    switch (executionStatus) {
+      case 'completed':
+        return 'bg-green-50';
+      case 'failed':
+        return 'bg-red-50';
+      case 'pending':
+        return 'bg-blue-50';
+      case 'in_progress':
+        return 'bg-amber-50';
+      default:
+        return '';
+    }
+  };
 
   // Render functions
   const renderHandles = useCallback(() => {
@@ -237,11 +398,11 @@ const BaseNode: FC<BaseNodeProps> = memo(({
         <Card
           className={`base-node ${nodeKind} ${isUCMode ? 'gradient-border' : ''} ${
             selected && isUCMode ? 'selected' : ''
-          } ${isDarkMode ? 'dark' : 'light'}`}
-          style={!isUCMode ? getNodeBorderStyle(nodeKind, nodeStatus, selected, isUCMode) : {}}
+          } ${isDarkMode ? 'dark' : 'light'} ${isExecuting ? 'executing' : ''} ${getNodeBackgroundClass()}`}
+          style={!isUCMode ? getNodeBorderStyle(nodeKind, nodeStatus, selected, isUCMode, isExecuting, executionStatus) : {}}
         >
           <div className={`node-content ${isDarkMode ? 'dark' : 'light'}`}>
-            <div style={{ fontSize: '30px' }}>
+            <div style={{ fontSize: '30px', position: 'relative' }}>
               {iconSrc ? (
                 <img
                   src={iconSrc}
@@ -252,10 +413,18 @@ const BaseNode: FC<BaseNodeProps> = memo(({
               ) : (
                 <Box size={50} />
               )}
+              
+              {/* Add spinner when node is executing */}
+              {isExecuting && (
+                <div className="executing-spinner">
+                  <Loader2 className="h-8 w-8 text-amber-500 animate-spin absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
+                </div>
+              )}
             </div>
           </div>
 
-          {selected && (
+          {/* Show log bar for all nodes with execution responses, not just selected ones */}
+          {(data.executionResponse || data?.status) && (
             <div className="log-bar">
               <span className="green-dot" style={logoDotStyle}></span>
               <div className="marquee-container">
@@ -266,83 +435,34 @@ const BaseNode: FC<BaseNodeProps> = memo(({
           {renderHandles()}
         </Card>
 
+        {/* Add status icon outside the node */}
+        {getStatusIcon()}
+
         <div className="node-label" style={{ color: isDarkMode ? '#fff' : '#555' }}>
-          {data?.label || ''}
+          {data?.type || nodeType || id}
         </div>
+        
+        {/* Add execution status badge if available */}
+        {executionStatus && (
+          <div className={`node-status-badge node-status-${executionStatus}`}>
+            {executionStatus}
+          </div>
+        )}
       </div>
 
-      <Sheet open={isSheetOpen} onOpenChange={handleSheetClose}>
-        <SheetContent className="w-[400px] sm:w-[540px] overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle className="text-xl font-bold">
-              Node Settings: {data?.label || 'Untitled Node'}
-            </SheetTitle>
-          </SheetHeader>
-          
-          <ScrollArea className="h-[calc(100vh-200px)] mt-6">
-            <form 
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleNodeSave(data);
-              }} 
-              className="space-y-6"
-            >
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="label">Node Label</Label>
-                  <Input
-                    id="label"
-                    value={data?.label || ''}
-                    onChange={(e) => onNodeDataChange(id, { ...data, label: e.target.value })}
-                    placeholder="Enter node label"
-                  />
-                </div>
-
-                <div>
-                  <Label>Node Type</Label>
-                  <Input
-                    value={nodeType}
-                    disabled
-                    className="bg-muted"
-                  />
-                </div>
-
-                <Separator className="my-4" />
-
-                <div>
-                  <Label htmlFor="operation">Operation</Label>
-                  <Input
-                    id="operation"
-                    value={data?.operation || ''}
-                    onChange={(e) => onNodeDataChange(id, { ...data, operation: e.target.value })}
-                    placeholder="Enter operation"
-                  />
-                </div>
-
-                <div>
-                  <Label htmlFor="operation_name">Operation Name</Label>
-                  <Input
-                    id="operation_name"
-                    value={data?.operation_name || ''}
-                    onChange={(e) => onNodeDataChange(id, { 
-                      ...data, 
-                      operation_name: e.target.value 
-                    })}
-                    placeholder="Enter operation name"
-                  />
-                </div>
-              </div>
-
-              <SheetFooter className="flex justify-end space-x-2">
-                <Button type="button" variant="outline" onClick={handleSheetClose}>
-                  Cancel
-                </Button>
-                <Button type="submit">Save Changes</Button>
-              </SheetFooter>
-            </form>
-          </ScrollArea>
-        </SheetContent>
-      </Sheet>
+      {/* Use DraggablePanels instead of NodeSettingsSheet */}
+      <DraggablePanels
+        isOpen={isModalOpen}
+        onClose={handleModalClose}
+        customSettings={customSettings}
+        onSave={handleNodeSave}
+        workflowId={data?.workflowId || ''}
+        nodeId={id}
+        nodeName={data?.type || nodeType || id}
+        nodeDescription={data?.description || ''}
+        nodeData={data}
+        connectedInputNodes={connectedInputNodes}
+      />
     </>
   );
 });

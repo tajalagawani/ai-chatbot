@@ -68,7 +68,7 @@ const NodeSettingsSheet: FC<NodeSettingsSheetProps> = ({
   const [availableOperations, setAvailableOperations] = useState<string[]>([]);
   const [isLoadingOperations, setIsLoadingOperations] = useState(false);
   
-  const API_BASE_URL = 'http://localhost:8000';
+  const API_BASE_URL = 'http://localhost:5088/api/nodes';
   
   // Reset local data when the sheet opens or data changes
   useEffect(() => {

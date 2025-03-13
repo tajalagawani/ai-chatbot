@@ -27,7 +27,7 @@ export const JsonOut: FC<Props> = ({
   }, [copyText]);
 
   return (
-<div className="relative bg-[#1A1B26] rounded-lg ">
+<div className="relative bg-[#0f0f10] rounded-lg ">
        <button
         className=" rounded pt-4 text-xs text-white hover:bg-[#2D2E3A] active:bg-[#2D2E3A]"
         onClick={() => {

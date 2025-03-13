@@ -1,6 +1,6 @@
 // src/services/nodeApiService.ts
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'http://localhost:5088/api/nodes';
 
 export interface NodeInfo {
   name: string;

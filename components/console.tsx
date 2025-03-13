@@ -1,7 +1,6 @@
+// Console.tsx
 import { Button } from './ui/button';
 import {
-  Dispatch,
-  SetStateAction,
   useCallback,
   useEffect,
   useRef,
@@ -16,160 +15,17 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/t
 import { ChevronDownIcon, ChevronUpIcon, CheckIcon, CopyIcon, LoaderIcon, Workflow, Info, AlertTriangle, Terminal, Clock } from 'lucide-react';
 import { TerminalWindowIcon, CrossSmallIcon } from './icons';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
-
-export type OutputContentType = 'text' | 'image' | 'error' | 'warning' | 'info' | 'success';
-
-export interface ConsoleOutputContent {
-  type: OutputContentType;
-  value: string;
-  timestamp?: string;
-}
-
-export interface ConsoleOutput {
-  id: string;
-  status: 'in_progress' | 'loading_packages' | 'completed' | 'failed';
-  contents: Array<ConsoleOutputContent>;
-  timestamp?: string;
-  executionTime?: number; // in milliseconds
-}
-
-interface ConsoleProps {
-  consoleOutputs: Array<ConsoleOutput>;
-  setConsoleOutputs: Dispatch<SetStateAction<Array<ConsoleOutput>>>;
-  maxHeight?: number;
-  minHeight?: number;
-  initialHeight?: number;
-}
-
-interface NodeStatus {
-  message: string;
-  status: 'completed' | 'failed' | 'pending' | 'in_progress';
-  timestamp: string;
-}
-
-interface WorkflowStatus {
-  result?: {
-    message: string;
-    node_status: Record<string, NodeStatus>;
-    results?: Record<string, any>;
-  };
-  status?: string;
-  error?: string;
-}
-
-// Theme colors - Darker theme
-const THEME = {
-  bg: {
-    primary: '#000000',
-    card: '#030303',
-    header: '#050505',
-    section: '#030303',
-    border: '#1a1a1a'
-  },
-  text: {
-    primary: '#e2e8f0',
-    secondary: '#94a3b8',
-    muted: '#4b5563'
-  },
-  status: {
-    completed: {
-      bg: 'rgba(6, 78, 59, 0.15)',
-      border: 'rgba(16, 185, 129, 0.3)',
-      text: '#10b981',
-      badgeBg: 'rgba(16, 185, 129, 0.15)'
-    },
-    failed: {
-      bg: 'rgba(127, 29, 29, 0.15)',
-      border: 'rgba(239, 68, 68, 0.3)',
-      text: '#ef4444',
-      badgeBg: 'rgba(239, 68, 68, 0.15)'
-    },
-    pending: {
-      bg: 'rgba(30, 58, 138, 0.15)',
-      border: 'rgba(59, 130, 246, 0.3)',
-      text: '#3b82f6',
-      badgeBg: 'rgba(59, 130, 246, 0.15)'
-    },
-    in_progress: {
-      bg: 'rgba(120, 53, 15, 0.15)',
-      border: 'rgba(245, 158, 11, 0.3)',
-      text: '#f59e0b',
-      badgeBg: 'rgba(245, 158, 11, 0.15)'
-    }
-  }
-};
-
-// Helper function to safely format timestamps
-const formatTimestamp = (timestamp) => {
-  if (!timestamp) return '';
-  
-  try {
-    // Check if timestamp is a valid date string or timestamp
-    const date = new Date(timestamp);
-    
-    // Check if date is valid (Invalid Date objects return NaN for getTime())
-    if (isNaN(date.getTime())) {
-      return '';
-    }
-    
-    return date.toLocaleTimeString();
-  } catch (error) {
-    console.error('Error formatting timestamp:', error);
-    return '';
-  }
-};
-
-// Format JSON for better display
-const formatJson = (jsonObj) => {
-  try {
-    return JSON.stringify(jsonObj, null, 2);
-  } catch (error) {
-    console.error('Error formatting JSON:', error);
-    return JSON.stringify(jsonObj);
-  }
-};
-
-// Try to detect if a string contains JSON and format it
-const formatPossibleJson = (text) => {
-  if (!text || typeof text !== 'string') return text;
-  
-  // Check if the string looks like JSON
-  if ((text.trim().startsWith('{') && text.trim().endsWith('}')) || 
-      (text.trim().startsWith('[') && text.trim().endsWith(']'))) {
-    try {
-      const parsed = JSON.parse(text);
-      return formatJson(parsed);
-    } catch {
-      // Not valid JSON, return as is
-      return text;
-    }
-  }
-  
-  return text;
-};
-
-// Extract node status from console output content
-const extractWorkflowStatus = (consoleOutput: ConsoleOutput): WorkflowStatus | null => {
-  try {
-    // Find content with execution result
-    const resultContent = consoleOutput.contents.find(content => 
-      content.value.includes('Execution completed:') || 
-      content.value.includes('Execution failed:')
-    );
-    
-    if (!resultContent) return null;
-    
-    // Extract JSON from the content
-    const jsonStart = resultContent.value.indexOf('{');
-    if (jsonStart === -1) return null;
-    
-    const jsonString = resultContent.value.substring(jsonStart);
-    return JSON.parse(jsonString);
-  } catch (error) {
-    console.error('Error extracting workflow status:', error);
-    return null;
-  }
-};
+import { 
+  ConsoleProps, 
+  ConsoleOutput
+} from './ConsoleTypes';
+import {
+  formatTimestamp,
+  formatJson,
+  formatPossibleJson,
+  extractWorkflowStatus,
+  getStatusStyles
+} from './ConsoleHelpers';
 
 export function Console({ 
   consoleOutputs, 
@@ -394,45 +250,6 @@ export function Console({
         </div>
       </CollapsibleSection>
     );
-  };
-
-  // Get status colors
-  const getStatusStyles = (status) => {
-    switch(status) {
-      case 'completed':
-        return {
-          bg: "rgba(6, 78, 59, 0.15)",
-          border: "rgba(16, 185, 129, 0.3)",
-          text: "#10b981",
-          badgeBg: "rgba(16, 185, 129, 0.15)",
-          icon: <CheckIcon className="size-3.5 text-[#10b981]" />
-        };
-      case 'failed':
-        return {
-          bg: "rgba(127, 29, 29, 0.15)",
-          border: "rgba(239, 68, 68, 0.3)",
-          text: "#ef4444",
-          badgeBg: "rgba(239, 68, 68, 0.15)",
-          icon: <AlertTriangle className="size-3.5 text-[#ef4444]" />
-        };
-      case 'in_progress':
-        return {
-          bg: "rgba(120, 53, 15, 0.15)",
-          border: "rgba(245, 158, 11, 0.3)",
-          text: "#f59e0b",
-          badgeBg: "rgba(245, 158, 11, 0.15)",
-          icon: <LoaderIcon className="size-3.5 text-[#f59e0b] animate-spin" />
-        };
-      case 'pending':
-      default:
-        return {
-          bg: "rgba(30, 58, 138, 0.15)",
-          border: "rgba(59, 130, 246, 0.3)",
-          text: "#3b82f6",
-          badgeBg: "rgba(59, 130, 246, 0.15)",
-          icon: <Clock className="size-3.5 text-[#3b82f6]" />
-        };
-    }
   };
 
   // If no outputs, don't render anything
@@ -911,141 +728,142 @@ export function Console({
                             </div>
                           );
                         })}
-                      </div>
-                    </CollapsibleSection>
-                  </div>
-                )}
-                
-                {/* Normal output display (non-workflow) */}
-                {!isWorkflowOutput && !['in_progress', 'loading_packages'].includes(consoleOutput.status) && (
-                  <div className="space-y-1">
-                    {consoleOutput.contents.map((content, contentIndex) => {
-                      if (content.type === 'image') {
-                        return (
-                          <div key={`${consoleOutput.id}-${contentIndex}`} className="relative group">
-                            <img
-                              src={content.value}
-                              alt="output"
-                              className="rounded-md max-w-[600px] w-full border border-[#121212]"
-                            />
-                            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Button
-                                variant="secondary"
-                                size="icon"
-                                className="size-7 bg-black/60 hover:bg-black/80 border-none text-white"
-                                onClick={() => window.open(content.value, '_blank')}
-                              >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                                  <polyline points="15 3 21 3 21 9" />
-                                  <line x1="10" y1="14" x2="21" y2="3" />
-                                </svg>
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      }
-                      
-                      // Attempt to detect and format JSON
-                      const formattedContent = formatPossibleJson(content.value);
-                      const isJson = formattedContent !== content.value;
-                      
-                      let bgColor = "#050505";
-                      let borderColor = "#121212";
-                      
-                      if (content.type === 'error') {
-                        bgColor = "rgba(127, 29, 29, 0.15)";
-                        borderColor = "rgba(239, 68, 68, 0.3)";
-                      } else if (content.type === 'warning') {
-                        bgColor = "rgba(120, 53, 15, 0.15)";
-                        borderColor = "rgba(245, 158, 11, 0.3)";
-                      } else if (content.type === 'info') {
-                        bgColor = "rgba(30, 58, 138, 0.15)";
-                        borderColor = "rgba(59, 130, 246, 0.3)";
-                      } else if (content.type === 'success') {
-                        bgColor = "rgba(6, 78, 59, 0.15)";
-                        borderColor = "rgba(16, 185, 129, 0.3)";
-                      }
-                      
-                      return (
-                        <div
-                          key={`${consoleOutput.id}-${contentIndex}`}
-                          className="w-full rounded overflow-hidden border"
-                          style={{
-                            backgroundColor: bgColor,
-                            borderColor: borderColor
-                          }}
-                        >
-                          {isJson ? (
-                            <CollapsibleSection
-                              id={`${consoleOutput.id}-content-${contentIndex}`}
-                              title="JSON Content"
-                              icon={<Info className="size-3.5 text-[#3b82f6]" />}
-                              className="border-0 rounded-none"
-                            >
-                              <div className="relative">
-                                <pre className="p-2 text-xs font-mono overflow-x-auto scrollbar-custom bg-[#030303] text-[#e2e8f0]">
-                                  {formattedContent}
-                                </pre>
+                        </div>
+                      </CollapsibleSection>
+                    </div>
+                  )}
+                  
+                  {/* Normal output display (non-workflow) */}
+                  {!isWorkflowOutput && !['in_progress', 'loading_packages'].includes(consoleOutput.status) && (
+                    <div className="space-y-1">
+                      {consoleOutput.contents.map((content, contentIndex) => {
+                        if (content.type === 'image') {
+                          return (
+                            <div key={`${consoleOutput.id}-${contentIndex}`} className="relative group">
+                              <img
+                                src={content.value}
+                                alt="output"
+                                className="rounded-md max-w-[600px] w-full border border-[#121212]"
+                              />
+                              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <Button
-                                  variant="ghost"
+                                  variant="secondary"
                                   size="icon"
-                                  className="absolute top-1 right-1 size-6 p-1 text-[#4b5563] hover:text-[#e2e8f0] hover:bg-[#1a1a1a] rounded-sm"
-                                  onClick={() => copyOutput(`${consoleOutput.id}-${contentIndex}`, formattedContent)}
-                                  title="Copy JSON"
+                                  className="size-7 bg-black/60 hover:bg-black/80 border-none text-white"
+                                  onClick={() => window.open(content.value, '_blank')}
                                 >
-                                  {copiedOutputId === `${consoleOutput.id}-${contentIndex}` ? (
-                                    <CheckIcon className="size-3.5" />
-                                  ) : (
-                                    <CopyIcon className="size-3.5" />
-                                  )}
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                    <polyline points="15 3 21 3 21 9" />
+                                    <line x1="10" y1="14" x2="21" y2="3" />
+                                  </svg>
                                 </Button>
                               </div>
-                            </CollapsibleSection>
-                          ) : (
-                            <pre className="p-2 text-xs font-mono whitespace-pre-wrap break-words overflow-x-auto scrollbar-custom text-[#e2e8f0]">
-                              {content.value}
-                            </pre>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                            </div>
+                          );
+                        }
+                        
+                        // Attempt to detect and format JSON
+                        const formattedContent = formatPossibleJson(content.value);
+                        const isJson = formattedContent !== content.value;
+                        
+                        let bgColor = "#050505";
+                        let borderColor = "#121212";
+                        
+                        if (content.type === 'error') {
+                          bgColor = "rgba(127, 29, 29, 0.15)";
+                          borderColor = "rgba(239, 68, 68, 0.3)";
+                        } else if (content.type === 'warning') {
+                          bgColor = "rgba(120, 53, 15, 0.15)";
+                          borderColor = "rgba(245, 158, 11, 0.3)";
+                        } else if (content.type === 'info') {
+                          bgColor = "rgba(30, 58, 138, 0.15)";
+                          borderColor = "rgba(59, 130, 246, 0.3)";
+                        } else if (content.type === 'success') {
+                          bgColor = "rgba(6, 78, 59, 0.15)";
+                          borderColor = "rgba(16, 185, 129, 0.3)";
+                        }
+                        
+                        return (
+                          <div
+                            key={`${consoleOutput.id}-${contentIndex}`}
+                            className="w-full rounded overflow-hidden border"
+                            style={{
+                              backgroundColor: bgColor,
+                              borderColor: borderColor
+                            }}
+                          >
+                            {isJson ? (
+                              <CollapsibleSection
+                                id={`${consoleOutput.id}-content-${contentIndex}`}
+                                title="JSON Content"
+                                icon={<Info className="size-3.5 text-[#3b82f6]" />}
+                                className="border-0 rounded-none"
+                              >
+                                <div className="relative">
+                                  <pre className="p-2 text-xs font-mono overflow-x-auto scrollbar-custom bg-[#030303] text-[#e2e8f0]">
+                                    {formattedContent}
+                                  </pre>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="absolute top-1 right-1 size-6 p-1 text-[#4b5563] hover:text-[#e2e8f0] hover:bg-[#1a1a1a] rounded-sm"
+                                    onClick={() => copyOutput(`${consoleOutput.id}-${contentIndex}`, formattedContent)}
+                                    title="Copy JSON"
+                                  >
+                                    {copiedOutputId === `${consoleOutput.id}-${contentIndex}` ? (
+                                      <CheckIcon className="size-3.5" />
+                                    ) : (
+                                      <CopyIcon className="size-3.5" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </CollapsibleSection>
+                            ) : (
+                              <pre className="p-2 text-xs font-mono whitespace-pre-wrap break-words overflow-x-auto scrollbar-custom text-[#e2e8f0]">
+                                {content.value}
+                              </pre>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-        <div ref={consoleEndRef} />
+            );
+          })}
+          <div ref={consoleEndRef} />
+        </div>
       </div>
-    </div>
-    
-    {/* Custom scrollbar styles */}
-    <style jsx global>{`
-      .scrollbar-custom::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
-      }
-      .scrollbar-custom::-webkit-scrollbar-track {
-        background: #000000;
-      }
-      .scrollbar-custom::-webkit-scrollbar-thumb {
-        background-color: #1a1a1a;
-        border-radius: 3px;
-      }
-      .scrollbar-custom::-webkit-scrollbar-thumb:hover {
-        background-color: #262626;
-      }
-      .scrollbar-custom {
-        scrollbar-width: thin;
-        scrollbar-color: #1a1a1a #000000;
-      }
       
-      /* Enhanced transitions for better UX */
-      .transition-height {
-        transition-property: height;
-        transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-      }
-    `}</style>
-  </>
-);
+      {/* Custom scrollbar styles */}
+      <style jsx global>{`
+        .scrollbar-custom::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        .scrollbar-custom::-webkit-scrollbar-track {
+          background: #000000;
+        }
+        .scrollbar-custom::-webkit-scrollbar-thumb {
+          background-color: #1a1a1a;
+          border-radius: 3px;
+        }
+        .scrollbar-custom::-webkit-scrollbar-thumb:hover {
+          background-color: #262626;
+        }
+        .scrollbar-custom {
+          scrollbar-width: thin;
+          scrollbar-color: #1a1a1a #000000;
+        }
+        
+        /* Enhanced transitions for better UX */
+        .transition-height {
+          transition-property: height;
+          transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+        }
+      `}</style>
+    </>
+  );
+}

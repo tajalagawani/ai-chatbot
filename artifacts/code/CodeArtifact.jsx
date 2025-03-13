@@ -51,7 +51,7 @@ const codeArtifact = {
       const metadata = {
         isValid: true,
         flowData: null,
-        viewMode: 'code',
+        viewMode: 'flow', // Set flow as default view
         artifactId: newArtifactId,
         containerId: null,
         port: null,
@@ -61,8 +61,8 @@ const codeArtifact = {
         executionResult: null,
         showFlowOption: true,
         isFlowFullscreen: false,
-        isStreaming: false, // Add isStreaming flag to metadata
-        nodeStatus: {}, // Add nodeStatus to store workflow execution status
+        isStreaming: false,
+        nodeStatus: {},
         outputs: [{
           id: generateUUID(),
           timestamp: new Date().toISOString(),
@@ -73,7 +73,8 @@ const codeArtifact = {
           status: isDockerHealthy ? 'completed' : 'failed'
         }],
         dockerStatus: isDockerHealthy ? 'ready' : 'unavailable',
-        lastError: null
+        lastError: null,
+        consoleVisible: false // Set console closed by default
       };
   
       console.log('Setting initial metadata:', metadata);
@@ -89,7 +90,7 @@ const codeArtifact = {
       setMetadata({
         isValid: true,
         flowData: null,
-        viewMode: 'code',
+        viewMode: 'flow', // Set flow as default view
         artifactId: newArtifactId,
         containerId: null,
         port: null,
@@ -111,7 +112,8 @@ const codeArtifact = {
           status: 'failed'
         }],
         dockerStatus: 'unavailable',
-        lastError: errorMessage
+        lastError: errorMessage,
+        consoleVisible: false // Set console closed by default
       });
   
       toast.error(`Agent initialization failed: ${errorMessage}`);
@@ -120,18 +122,21 @@ const codeArtifact = {
 
   content: ({ content, onSaveContent, metadata, setMetadata }) => {
     const [isExecuting, setIsExecuting] = useState(false);
-    const [initialViewSet, setInitialViewSet] = useState(false);
+    const [initialViewSet, setInitialViewSet] = useState(true); // Set to true to prevent auto view switching
     const { width: windowWidth, height: windowHeight } = useWindowSize();
     const [flowContentUpdated, setFlowContentUpdated] = useState(false);
     const contentRef = useRef(content);
     const lastSavedContentRef = useRef(content);
     const isStreamingRef = useRef(false);
 
-    // Use a separate controlled view mode that doesn't rely on metadata
-    const [viewMode, setViewMode] = useState(metadata?.viewMode || 'code');
+    // Use a separate controlled view mode that defaults to flow
+    const [viewMode, setViewMode] = useState(metadata?.viewMode || 'flow');
     
     // Use a ref to track the latest metadata viewMode
-    const metadataViewModeRef = useRef(metadata?.viewMode || 'code');
+    const metadataViewModeRef = useRef(metadata?.viewMode || 'flow');
+    
+    // Track console visibility
+    const [consoleVisible, setConsoleVisible] = useState(metadata?.consoleVisible || false);
     
     // Track streaming state for auto-save prevention
     useEffect(() => {
@@ -165,6 +170,13 @@ const codeArtifact = {
         setViewMode(metadata.viewMode);
       }
     }, [metadata?.viewMode]);
+
+    // Sync console visibility state with metadata
+    useEffect(() => {
+      if (metadata?.consoleVisible !== undefined) {
+        setConsoleVisible(metadata.consoleVisible);
+      }
+    }, [metadata?.consoleVisible]);
 
     // Keep track of the latest content
     useEffect(() => {
@@ -212,7 +224,6 @@ const codeArtifact = {
       }
       
       console.log('FLOW CONTENT UPDATED, SAVING TO CODE CONTENT');
-      // toast.info('Flow changes saved to code');
       setFlowContentUpdated(true);
       
       // Force the content to update
@@ -262,6 +273,15 @@ const codeArtifact = {
       });
     }, [setMetadata, flowContentUpdated]);
 
+    // Toggle console visibility
+    const toggleConsole = useCallback(() => {
+      setConsoleVisible(prev => !prev);
+      setMetadata(prev => ({
+        ...prev,
+        consoleVisible: !prev.consoleVisible
+      }));
+    }, [setMetadata]);
+
     // Extract node status from execution results
     useEffect(() => {
       if (metadata?.outputs && metadata.outputs.length > 0) {
@@ -308,8 +328,17 @@ const codeArtifact = {
       }
     }, [metadata?.outputs, setMetadata]);
 
-    // Monitor execution status
+    // Monitor execution status and auto-show console during execution
     useEffect(() => {
+      // Auto-open console when starting execution
+      if (metadata?.executionStatus === 'running' && !consoleVisible) {
+        setConsoleVisible(true);
+        setMetadata(prev => ({
+          ...prev,
+          consoleVisible: true
+        }));
+      }
+      
       if (!metadata?.executionId || !metadata?.port) return;
 
       let isMounted = true;
@@ -338,7 +367,8 @@ const codeArtifact = {
                 }],
                 status: 'in_progress'
               }
-            ]
+            ],
+            consoleVisible: true // Keep console visible during execution
           }));
           
           if (data.status === 'completed' || data.status === 'failed') {
@@ -360,7 +390,8 @@ const codeArtifact = {
                   }],
                   status: data.status === 'completed' ? 'completed' : 'failed'
                 }
-              ]
+              ],
+              consoleVisible: true // Auto-show console on execution complete/fail
             }));
 
             // If execution returned node status information, update metadata
@@ -374,6 +405,7 @@ const codeArtifact = {
 
             setIsExecuting(false);
             toast(data.status === 'completed' ? 'Execution completed' : 'Execution failed');
+            setConsoleVisible(true); // Also update local state
           }
         } catch (error) {
           if (!isMounted) return;
@@ -394,8 +426,10 @@ const codeArtifact = {
                 }],
                 status: 'failed'
               }
-            ]
+            ],
+            consoleVisible: true // Show console on error
           }));
+          setConsoleVisible(true); // Also update local state
         }
       };
 
@@ -404,7 +438,7 @@ const codeArtifact = {
         isMounted = false;
         clearInterval(interval);
       };
-    }, [metadata?.executionId, metadata?.port, setMetadata]);
+    }, [metadata?.executionId, metadata?.executionStatus, metadata?.port, setMetadata, consoleVisible]);
 
     // Handle fullscreen escape key
     useEffect(() => {
@@ -430,14 +464,6 @@ const codeArtifact = {
       }
     }, [viewMode, flowContentUpdated]);
 
-    // Add direct console log to check metadata state at runtime
-    useEffect(() => {
-      console.log('Current metadata state:', metadata);
-      console.log('Current view mode state:', viewMode);
-      console.log('Ref view mode:', metadataViewModeRef.current);
-      console.log('Is streaming:', isStreamingRef.current);
-    }, [metadata, viewMode]);
-
     // Force the metadata to have showFlowOption set to true
     useEffect(() => {
       if (metadata && metadata.showFlowOption !== true) {
@@ -449,73 +475,157 @@ const codeArtifact = {
       }
     }, [metadata, setMetadata]);
 
-    // Parse content and check if it's ACT content but preserve showFlowOption
+    // Create and inject our own actions
     useEffect(() => {
-      if (!content) return;
-    
-      try {
-        const actContentDetected = isActContent(content);
-        console.log("ACT content detected:", actContentDetected);
-        
-        // Skip view switching during streaming
-        if (isStreamingRef.current) {
-          console.log('Skipping view mode change during streaming');
-          return;
-        }
-        
-        setMetadata(prev => {
-          // Calculate the new view mode, ensuring we don't override a manual setting
-          let newViewMode = prev.viewMode;
-          if (!initialViewSet && actContentDetected) {
-            newViewMode = 'flow';
-            // Update our local state and ref too
-            setViewMode('flow');
-            metadataViewModeRef.current = 'flow';
-          }
-          
-          return {
-            ...prev,
-            // Keep showFlowOption true even if not ACT content
-            showFlowOption: true,
-            viewMode: newViewMode
-          };
-        });
-        
-        if (!initialViewSet && actContentDetected) {
-          setInitialViewSet(true);
-        }
-      } catch (error) {
-        console.error('Failed to parse ACT file:', error);
-        setMetadata(prev => ({
-          ...prev,
-          flowData: null,
-          // Keep isValid true and showFlowOption true even with errors
-          isValid: true,
-          showFlowOption: true
-        }));
+      if (!Array.isArray(actions)) {
+        console.error('actions is not an array');
+        return;
       }
-    }, [content, setMetadata, initialViewSet]);
-
-    // Add direct toggle support for custom actions
-    useEffect(() => {
-      // Find the toggle action and make it use our custom handler
-      const toggleAction = actions.find(
-        action => action.label === 'Toggle View' || 
-                 (action.description && action.description.includes('Switch between'))
+      
+      // Find the toggle view action to determine insertion position
+      const toggleViewIndex = actions.findIndex(
+        action => action.description && action.description.includes('Switch between')
       );
       
-      if (toggleAction) {
-        const originalOnClick = toggleAction.onClick;
+      // Check if we already added our console toggle action
+      const consoleToggleExists = actions.some(
+        action => action.description && 
+                (action.description.includes('console output') || 
+                 action.description.includes('Show the console') || 
+                 action.description.includes('Hide the console'))
+      );
+      
+      // Only add if it doesn't exist
+      if (!consoleToggleExists && toggleViewIndex !== -1) {
+        // Create console toggle action
+        const consoleToggleAction = {
+          icon: consoleVisible ? 
+                React.createElement('div', { className: 'text-primary' }, 
+                  React.createElement('svg', { 
+                    width: 16, 
+                    height: 16, 
+                    viewBox: '0 0 24 24',
+                    fill: 'none',
+                    stroke: 'currentColor',
+                    strokeWidth: 2,
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'round',
+                    'data-lucide': 'terminal'
+                  }, [
+                    React.createElement('polyline', { key: 'p1', points: '4 17 10 11 4 5' }),
+                    React.createElement('line', { key: 'l1', x1: '12', y1: '19', x2: '20', y2: '19' })
+                  ])
+                ) :
+                React.createElement('svg', { 
+                  width: 16, 
+                  height: 16, 
+                  viewBox: '0 0 24 24',
+                  fill: 'none',
+                  stroke: 'currentColor',
+                  strokeWidth: 2,
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round',
+                  'data-lucide': 'terminal'
+                }, [
+                  React.createElement('polyline', { key: 'p1', points: '4 17 10 11 4 5' }),
+                  React.createElement('line', { key: 'l1', x1: '12', y1: '19', x2: '20', y2: '19' })
+                ]),
+          description: 'Toggle console output',
+          onClick: () => toggleConsole()
+        };
         
-        // Replace with our custom handler
-        toggleAction.onClick = () => {
-          handleToggleView();
+        // Insert after the toggle view action
+        actions.splice(toggleViewIndex + 1, 0, consoleToggleAction);
+        console.log('Console toggle action added to actions array');
+      }
+      
+      // Update existing console toggle action if it exists
+      const existingConsoleAction = actions.find(
+        action => action.description && 
+                (action.description.includes('console output') || 
+                 action.description.includes('Toggle console'))
+      );
+      
+      if (existingConsoleAction) {
+        existingConsoleAction.icon = consoleVisible ? 
+          React.createElement('div', { className: 'text-primary' }, 
+            React.createElement('svg', { 
+              width: 16, 
+              height: 16, 
+              viewBox: '0 0 24 24',
+              fill: 'none',
+              stroke: 'currentColor',
+              strokeWidth: 2,
+              strokeLinecap: 'round',
+              strokeLinejoin: 'round',
+              'data-lucide': 'terminal'
+            }, [
+              React.createElement('polyline', { key: 'p1', points: '4 17 10 11 4 5' }),
+              React.createElement('line', { key: 'l1', x1: '12', y1: '19', x2: '20', y2: '19' })
+            ])
+          ) :
+          React.createElement('svg', { 
+            width: 16, 
+            height: 16, 
+            viewBox: '0 0 24 24',
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeWidth: 2,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+            'data-lucide': 'terminal'
+          }, [
+            React.createElement('polyline', { key: 'p1', points: '4 17 10 11 4 5' }),
+            React.createElement('line', { key: 'l1', x1: '12', y1: '19', x2: '20', y2: '19' })
+          ]);
+        existingConsoleAction.description = consoleVisible ? 
+          'Hide console output' : 
+          'Show console output';
+        existingConsoleAction.onClick = () => toggleConsole();
+      }
+      
+      // Update existing toggle view action
+      const toggleViewAction = actions.find(
+        action => action.description && action.description.includes('Switch between')
+      );
+      
+      if (toggleViewAction) {
+        toggleViewAction.onClick = () => handleToggleView();
+      }
+      
+    }, [handleToggleView, toggleConsole, consoleVisible]);
+
+    // Modify Run Agent action to auto-show console
+    useEffect(() => {
+      // Find the Run Agent action
+      const runAgentAction = actions.find(
+        action => action.label === 'Run Agent' || 
+                 (action.description && action.description.includes('Run workflow'))
+      );
+      
+      if (runAgentAction && runAgentAction.onClick) {
+        // Save the original onClick handler
+        const originalOnClick = runAgentAction.onClick;
+        
+        // Replace with our own that also shows the console
+        runAgentAction.onClick = async (args) => {
+          // Show console before running
+          if (!consoleVisible) {
+            setConsoleVisible(true);
+            setMetadata(prev => ({
+              ...prev,
+              consoleVisible: true
+            }));
+          }
+          
+          // Call the original handler
+          return originalOnClick(args);
         };
       }
-    }, [handleToggleView]);
+    }, [setMetadata, consoleVisible]);
 
     return (
-      <div className="relative w-full h-full">
+      <div className="relative w-full h-full flex flex-col">
         <div className="absolute top-2 right-2 z-10 flex gap-2">
           {/* Status indicator for streaming */}
           {isStreamingRef.current && (
@@ -529,27 +639,32 @@ const codeArtifact = {
         {viewMode === 'flow' ? (
           <div style={{ 
             width: '100%', 
-            height: metadata?.isFlowFullscreen ? '100vh' : 'calc(100vh - 80px)',
+            height: metadata?.isFlowFullscreen ? '100vh' : '100%',
             position: metadata?.isFlowFullscreen ? 'fixed' : 'relative',
             top: metadata?.isFlowFullscreen ? '0' : 'auto',
             left: metadata?.isFlowFullscreen ? '0' : 'auto',
-            zIndex: metadata?.isFlowFullscreen ? 50 : 'auto'
+            zIndex: metadata?.isFlowFullscreen ? 50 : 'auto',
+            flex: '1 1 auto',
+            display: 'flex',
+            flexDirection: 'column'
           }}>
             <ActFlowVisualizer 
               content={content}
               isStreaming={metadata?.status === 'streaming'}
-              metadata={metadata} // This contains nodeStatus from the effect above
+              metadata={metadata}
               setMetadata={setMetadata}
               onContentChange={handleFlowContentChange}
               status={metadata?.status}
+              style={{ width: '100%', height: '100%', flex: '1 1 auto' }}
             />
           </div>
         ) : (
-          <div className="w-full h-[calc(100vh-80px)]">
+          <div className="w-full flex-1 flex flex-col">
             <CodeEditor 
               content={content} 
               onSaveContent={handleSaveContent}
               status={metadata?.status}
+              style={{ width: '100%', height: '100%', flex: '1 1 auto' }}
             />
             {metadata?.isValid === false && (
               <Alert variant="destructive" className="mt-4">
@@ -563,7 +678,7 @@ const codeArtifact = {
           </div>
         )}
 
-        {!metadata?.isFlowFullscreen && metadata?.outputs && metadata.outputs.length > 0 && (
+        {!metadata?.isFlowFullscreen && consoleVisible && metadata?.outputs && metadata.outputs.length > 0 && (
           <Console
             consoleOutputs={metadata.outputs}
             setConsoleOutputs={() => {

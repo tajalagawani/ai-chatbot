@@ -6,8 +6,9 @@ import { DndContext, DragEndEvent } from "@dnd-kit/core";
 import { useTheme } from "next-themes";
 import { motion, AnimatePresence } from "framer-motion";
 import { IconGridDots } from "@tabler/icons-react";
-import { X } from "lucide-react"; // Import shadcn icon for X
+import { X } from "lucide-react";
 
+import DynamicNodeSettings from "./DynamicNodeSettings";
 import OutputPane from "./OutputPane";
 import InputPane from "./InputPane";
 
@@ -16,7 +17,7 @@ interface DraggablePanelsProps {
   onClose: () => void;
   nodeName: string;
   nodeDescription: string;
-  customSettings: React.ReactElement<{
+  customSettings?: React.ReactElement<{
     onDragEnd: (event: DragEndEvent) => void;
     workflowId?: string;
     nodeData?: any;
@@ -39,6 +40,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
     workflowId,
     nodeId,
     nodeName,
+    nodeDescription,
     nodeData,
     connectedInputNodes,
   }) => {
@@ -50,14 +52,14 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
     const [isDragging, setIsDragging] = useState(false);
 
     // Fixed container width that won't change
-    const containerWidth = 2800; // Increased to match your code
-    const minimumBoxWidth = 600; // Increased to match your code
-    const minimumMiddleBoxWidth = 600; // Increased to match your code
+    const containerWidth = 2800;
+    const minimumBoxWidth = 600;
+    const minimumMiddleBoxWidth = 780;
 
     // Use fixed sizes that won't change unless explicitly dragged
     const [sizes, setSizes] = useState({
-      leftWidth: 1050, // Increased to match your code
-      rightWidth: 1050, // Increased to match your code
+      leftWidth: 1050,
+      rightWidth: 1050,
     });
 
     // Reset sizes when modal opens
@@ -150,6 +152,29 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
       [nodeId, workflowId, executionResponse],
     );
 
+    const renderDynamicSettings = () => {
+      // If custom settings are provided, use those instead
+      if (customSettings) {
+        return React.cloneElement(customSettings, {
+          workflowId,
+          nodeData,
+          onSave,
+          onExecutionComplete: handleExecutionComplete,
+        });
+      }
+      
+      // Otherwise render our dynamic settings
+      return (
+        <DynamicNodeSettings
+          nodeData={nodeData}
+          workflowId={workflowId}
+          nodeId={nodeId}
+          onSave={onSave}
+          onExecutionComplete={handleExecutionComplete}
+        />
+      );
+    };
+
     const renderPanelHeader = () => (
       <div className="flex items-center p-2">
         <div className="flex items-center gap-2 z-10">
@@ -180,10 +205,9 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
               exit={{ opacity: 0, y: 20 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
               style={{
-                width: "calc(100vw - 80px)", // Exactly 40px on each side
-                height: "calc(100vh - 20px)", // Minimal margin - only 10px on top and bottom
-                margin: 0,
-                padding: 0,
+                width: "calc(100vw - 50px)", // Changed to 10px margin on each side (20px total)
+                height: "calc(105vh - 20px)", // Changed to 10px margin on top and bottom (20px total)
+                paddingBottom: "20px", // Changed to 10px padding on bottom
               }}
               className={isDragging ? 'select-none' : ''}
             >
@@ -194,7 +218,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                     height: "100%",
                     backgroundColor: 'transparent',
                     overflow: "hidden",
-                    borderRadius: "16px",
+                    borderRadius: "8px",
                     backdropFilter: "blur(16px)",
                   }}
                 >
@@ -230,11 +254,11 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                         height: "100%",
                         overflow: "auto",
                         position: "relative",
-                        background: '#09090b',
-                        borderRadius: "16px",
-                        border: '0.1px solid #2d2d2d',
+                        background: isDarkMode ? '#09090b' : '#ffffff',
+                        borderRadius: "8px",
+                        border: isDarkMode ? '0.1px solid #2d2d2d' : '0.1px solid #e0e0e0',
                         zIndex: 2,
-                        boxShadow: '0 12px 40px rgba(0, 0, 0, 0.5)',
+                        boxShadow: isDarkMode ? '0 12px 40px rgba(0, 0, 0, 0.5)' : '0 12px 40px rgba(0, 0, 0, 0.1)',
                         display: "flex",
                         flexDirection: "column",
                       }}
@@ -253,37 +277,35 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                       
                       {/* More visible drag handle */}
                       <div
-                        className={`flex items-center justify-center mx-auto p-2 mt-2 mb-1 cursor-move border border-gray-700 rounded-md hover:bg-gray-800 ${
-                          isDragging ? 'select-none' : ''
-                        }`}
+                        className={`flex items-center justify-center mx-auto p-2 mt-1 mb-1 cursor-move border rounded-md ${
+                          isDarkMode ? 'border-gray-700 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-100'
+                        } ${isDragging ? 'select-none' : ''}`}
                         onMouseDown={handleMouseDown}
                         style={{
                           width: '32px',
                           height: '20px',
-                          backgroundColor: 'rgba(40, 40, 40, 0.9)',
+                          backgroundColor: isDarkMode ? 'rgba(40, 40, 40, 0.9)' : 'rgba(240, 240, 240, 0.9)',
                         }}
                       >
                         <IconGridDots 
                           size={16}
                           style={{ transform: 'rotate(90deg)' }}
-                          stroke={'rgba(200, 200, 200, 0.9)'}
+                          stroke={isDarkMode ? 'rgba(200, 200, 200, 0.9)' : 'rgba(100, 100, 100, 0.9)'}
                           strokeWidth={2.5}
                         />
                       </div>
                       
-                      {customSettings && React.cloneElement(customSettings, {
-                        workflowId,
-                        nodeData,
-                        onSave,
-                        onExecutionComplete: handleExecutionComplete,
-                      })}
+                      {/* Render our dynamic settings component */}
+                      <div className="p-4 pt-2 flex-1 overflow-auto">
+                        {renderDynamicSettings()}
+                      </div>
                     </Card>
                     <Paper
                       sx={{
                         width: sizes.rightWidth,
                         height: "92%",
                         overflow: "hidden",
-                        borderRadius: "0 8px 8px 0",
+                        borderRadius: "0 2px 2px 0",
                         position: "relative",
                         background: isDarkMode ? 'rgba(3, 3, 3, 0.9)' : 'rgba(255, 255, 255, 0.9)',
                         zIndex: 1,
@@ -302,7 +324,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                     height: "100%",
                     backgroundColor: isDarkMode ? 'rgba(11, 12, 18, 0.8)' : 'rgba(255, 255, 255, 0.8)',
                     overflow: "hidden",
-                    borderRadius: "16px",
+                    borderRadius: "8px",
                     backdropFilter: "blur(16px)",
                   }}
                 >
@@ -314,12 +336,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                     transition={{ duration: 0.2 }}
                   >
                     {activeTab === 'settings' ? (
-                      customSettings && React.cloneElement(customSettings, {
-                        workflowId,
-                        nodeData,
-                        onSave,
-                        onExecutionComplete: handleExecutionComplete,
-                      })
+                      renderDynamicSettings()
                     ) : (
                       <div className="prose dark:prose-invert">
                         <pre className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg">

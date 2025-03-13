@@ -460,7 +460,7 @@ function PureArtifact({
           )}
 
           <motion.div
-            className="fixed dark:bg-muted bg-background h-dvh flex flex-col overflow-y-scroll border-zinc-200"
+            className="fixed   ' h-dvh flex flex-col overflow-y-scroll border-zinc-200"
             initial={
               isMobile
                 ? {
@@ -507,8 +507,8 @@ function PureArtifact({
               transition: { delay: 0.1, type: 'spring', stiffness: 600, damping: 30 },
             }}
           >
-            <div className="p-2 flex flex-row justify-between items-start">
-              <div className="flex flex-row gap-2 items-start">
+    <div className="p-1 flex flex-row justify-between items-start bg-transparent">
+    <div className="flex flex-row gap-2 items-start">
                 <ArtifactCloseButton />
                 <div className="flex flex-col">
                   {isContentDirty ? (
@@ -535,7 +535,7 @@ function PureArtifact({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 bg-transparent">
                 <ArtifactActions
                   artifact={artifact}
                   currentVersionIndex={currentVersionIndex}
@@ -548,7 +548,7 @@ function PureArtifact({
               </div>
             </div>
 
-            <div className="dark:bg-muted bg-background h-full overflow-y-scroll !max-w-full items-center">
+            <div className="  h-full overflow-y-scroll  items-center">
               <artifactDefinition.content
                 title={artifact.title}
                 content={

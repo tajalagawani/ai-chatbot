@@ -31,6 +31,8 @@ export function Chat({
 }) {
   const { mutate } = useSWRConfig();
   const artifact = useArtifactSelector((state) => state);
+  const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
+  const isArtifactFullScreen = useArtifactSelector((state) => state.isFullScreen);
 
   const {
     messages,
@@ -153,11 +155,11 @@ export function Chat({
   );
 
   const [attachments, setAttachments] = useState<Array<Attachment>>([]);
-  const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
 
   return (
     <>
-      <div className="flex flex-col min-w-0 h-dvh bg-background">
+      {/* Hide the chat interface when artifact is in full screen mode */}
+      <div className={`flex flex-col min-w-0 h-dvh bg-background ${isArtifactFullScreen ? 'hidden' : ''}`}>
         <ChatHeader
           chatId={id}
           selectedModelId={selectedChatModel}
@@ -171,7 +173,7 @@ export function Chat({
           votes={votes}
           messages={messages}
           setMessages={setMessages}
-          reload={enhancedReload} // Use enhanced reload
+          reload={enhancedReload}
           isReadonly={isReadonly}
           isArtifactVisible={isArtifactVisible}
         />
@@ -182,7 +184,7 @@ export function Chat({
               chatId={id}
               input={input}
               setInput={setInput}
-              handleSubmit={enhancedHandleSubmit} // Use enhanced handleSubmit
+              handleSubmit={enhancedHandleSubmit}
               isLoading={isLoading}
               stop={stop}
               attachments={attachments}
@@ -199,7 +201,7 @@ export function Chat({
         chatId={id}
         input={input}
         setInput={setInput}
-        handleSubmit={enhancedHandleSubmit} // Use enhanced handleSubmit
+        handleSubmit={enhancedHandleSubmit}
         isLoading={isLoading}
         stop={stop}
         attachments={attachments}
@@ -207,7 +209,7 @@ export function Chat({
         append={append}
         messages={messages}
         setMessages={setMessages}
-        reload={enhancedReload} // Use enhanced reload
+        reload={enhancedReload}
         votes={votes}
         isReadonly={isReadonly}
       />

@@ -198,7 +198,11 @@ const OutputPane: React.FC<OutputPaneProps> = React.memo(({ nodeId, workflowId, 
           setOutputData(executionResponse);
           setDraggableItems(generateDraggableItems(executionResponse));
         } else {
-          const nodeData = await fetchNodeData(workflowId, nodeId);
+          // Either implement the fetchNodeData function or replace with an appropriate API call
+          // For example:
+          // const response = await fetch(`/api/workflows/${workflowId}/nodes/${nodeId}`);
+          // const nodeData = await response.json();
+          setOutputData({ message: "No execution response provided" });
           if (nodeData?.data?.executionResponse) {
             setOutputData(nodeData.data.executionResponse);
             setDraggableItems(generateDraggableItems(nodeData.data.executionResponse));

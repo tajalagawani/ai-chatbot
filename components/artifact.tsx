@@ -33,6 +33,8 @@ import { codeArtifact } from '@/artifacts/code/index';
 import { sheetArtifact } from '@/artifacts/sheet/client';
 import { textArtifact } from '@/artifacts/text/client';
 import equal from 'fast-deep-equal';
+import { Maximize2, Minimize2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 export const artifactDefinitions = [
   textArtifact,
@@ -60,6 +62,7 @@ export interface UIArtifact {
   lastContent?: string;
   currentContent?: string;
   lastUpdateTime?: number;
+  isFullScreen?: boolean; // New property for full-screen mode
 }
 
 function PureArtifact({
@@ -101,6 +104,9 @@ function PureArtifact({
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
 
+  // State for full-screen mode
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
   const {
     data: documents,
     isLoading: isDocumentsFetching,
@@ -126,6 +132,38 @@ function PureArtifact({
   const [isToolbarVisible, setIsToolbarVisible] = useState(false);
   const { width: windowWidth, height: windowHeight } = useWindowSize();
   const isMobile = windowWidth ? windowWidth < 768 : false;
+
+  // Toggle full-screen mode
+  const toggleFullScreen = useCallback(() => {
+    const newFullScreenState = !isFullScreen;
+    setIsFullScreen(newFullScreenState);
+    
+    // If exiting full-screen mode and we have the metadata with flowInstance
+    if (!newFullScreenState && metadata?.flowInstance) {
+      // Wait for the animation to complete
+      setTimeout(() => {
+        console.log('Exiting fullscreen, triggering flow fit view');
+        
+        try {
+          // If metadata has the flowInstance with a fitView method, call it
+          if (metadata.flowInstance.fitView && typeof metadata.flowInstance.fitView === 'function') {
+            metadata.flowInstance.fitView({
+              padding: 0.4,
+              minZoom: 0.1,
+              maxZoom: 2,
+              duration: 300
+            });
+            console.log('Successfully called fitView on flow instance');
+          }
+        } catch (e) {
+          console.error('Error calling fitView:', e);
+        }
+        
+        // Also dispatch a window resize event which often helps components recalculate dimensions
+        window.dispatchEvent(new Event('resize'));
+      }, 500); // Wait for the animation to complete
+    }
+  }, [isFullScreen, metadata]);
 
   // Enhanced reload function to ensure latest document is fetched and included in the request
   const enhancedReload = useCallback(
@@ -384,12 +422,13 @@ function PureArtifact({
     <AnimatePresence>
       {artifact.isVisible && (
         <motion.div
-          className="flex flex-row h-dvh w-dvw fixed top-0 left-0 z-50 bg-transparent"
+          className="flex flex-row h-dvh w-dvw fixed top-0 left-0 z-50"
           initial={{ opacity: 1 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { delay: 0.4 } }}
         >
-          {!isMobile && (
+          {/* Left panel with messages - hide in full-screen mode */}
+          {!isMobile && !isFullScreen && (
             <motion.div
               className="fixed bg-background h-dvh"
               initial={{
@@ -404,7 +443,8 @@ function PureArtifact({
             />
           )}
 
-          {!isMobile && (
+          {/* Chat messages panel - hide in full-screen mode */}
+          {!isMobile && !isFullScreen && (
             <motion.div
               className="relative w-[400px] bg-muted dark:bg-background h-dvh shrink-0 border-r border-zinc-800"
               initial={{ opacity: 0, x: 10, scale: 1 }}
@@ -434,7 +474,7 @@ function PureArtifact({
                   votes={votes}
                   messages={messages}
                   setMessages={setMessages}
-                  reload={enhancedReload} // Use enhancedReload instead of reload
+                  reload={enhancedReload}
                   isReadonly={isReadonly}
                   artifactStatus={artifact.status}
                 />
@@ -444,7 +484,7 @@ function PureArtifact({
                     chatId={chatId}
                     input={input}
                     setInput={setInput}
-                    handleSubmit={enhancedHandleSubmit} // Use enhancedHandleSubmit instead
+                    handleSubmit={enhancedHandleSubmit}
                     isLoading={isLoading}
                     stop={stop}
                     attachments={attachments}
@@ -459,8 +499,9 @@ function PureArtifact({
             </motion.div>
           )}
 
+          {/* Artifact content panel - adjust for full-screen mode */}
           <motion.div
-            className="fixed   ' h-dvh flex flex-col overflow-y-scroll border-zinc-200"
+            className="fixed h-dvh flex flex-col overflow-y-scroll border-zinc-200 bg-background dark:bg-background"
             initial={
               isMobile
                 ? {
@@ -491,15 +532,25 @@ function PureArtifact({
                   borderRadius: 0,
                   transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
                 }
-                : {
-                  opacity: 1,
-                  x: 400,
-                  y: 0,
-                  height: windowHeight,
-                  width: windowWidth - 400,
-                  borderRadius: 0,
-                  transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
-                }
+                : isFullScreen
+                  ? {
+                    opacity: 1,
+                    x: 0,
+                    y: 0,
+                    height: windowHeight,
+                    width: windowWidth,
+                    borderRadius: 0,
+                    transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
+                  }
+                  : {
+                    opacity: 1,
+                    x: 400,
+                    y: 0,
+                    height: windowHeight,
+                    width: windowWidth - 400,
+                    borderRadius: 0,
+                    transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
+                  }
             }
             exit={{
               opacity: 0,
@@ -507,8 +558,8 @@ function PureArtifact({
               transition: { delay: 0.1, type: 'spring', stiffness: 600, damping: 30 },
             }}
           >
-    <div className="p-1 flex flex-row justify-between items-start bg-transparent">
-    <div className="flex flex-row gap-2 items-start">
+            <div className="p-1 flex flex-row justify-between items-start bg-background dark:bg-background">
+              <div className="flex flex-row gap-2 items-start">
                 <ArtifactCloseButton />
                 <div className="flex flex-col">
                   {isContentDirty ? (
@@ -535,7 +586,22 @@ function PureArtifact({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 bg-transparent">
+              <div className="flex items-center gap-2 bg-background dark:bg-background">
+                {/* Full-screen toggle button */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleFullScreen}
+                  title={isFullScreen ? "Exit full screen" : "Full screen"}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  {isFullScreen ? (
+                    <Minimize2 className="h-4 w-4" />
+                  ) : (
+                    <Maximize2 className="h-4 w-4" />
+                  )}
+                </Button>
+
                 <ArtifactActions
                   artifact={artifact}
                   currentVersionIndex={currentVersionIndex}
@@ -548,7 +614,7 @@ function PureArtifact({
               </div>
             </div>
 
-            <div className="  h-full overflow-y-scroll  items-center">
+            <div className="h-full overflow-y-scroll items-center bg-background dark:bg-background">
               <artifactDefinition.content
                 title={artifact.title}
                 content={

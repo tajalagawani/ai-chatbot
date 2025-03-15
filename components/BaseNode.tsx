@@ -1,9 +1,10 @@
+// Enhanced BaseNode.tsx
 import React, { memo, FC, useState, useEffect, useCallback, useMemo } from 'react';
 import { Handle, Position, NodeProps, Node, Edge } from 'reactflow';
 import { useTheme } from 'next-themes';
 import { Card } from '@/components/ui/card';
 import { Box, Loader2, AlertCircle, CheckCircle, Clock } from 'lucide-react';
-import DraggablePanels from './panelsModal'; // Import DraggablePanels instead of NodeSettingsSheet
+import DraggablePanels from './panelsModal';
 import './BaseNode.css';
 
 interface BaseNodeProps extends NodeProps {
@@ -174,13 +175,13 @@ const BaseNode: FC<BaseNodeProps> = memo(({
 
       switch (executionStatus) {
         case 'completed':
-          return styleWithShadow('#10b981', 'rgba(16, 185, 129, 0.3)'); // Green
+          return styleWithShadow('#10b981', 'rgba(16, 185, 129, 0.3)');
         case 'failed':
-          return styleWithShadow('#ef4444', 'rgba(239, 68, 68, 0.3)'); // Red
+          return styleWithShadow('#ef4444', 'rgba(239, 68, 68, 0.3)');
         case 'pending':
-          return styleWithShadow('#3b82f6', 'rgba(59, 130, 246, 0.3)'); // Blue
+          return styleWithShadow('#3b82f6', 'rgba(59, 130, 246, 0.3)');
         case 'in_progress':
-          return styleWithShadow('#f59e0b', 'rgba(245, 158, 11, 0.3)'); // Amber
+          return styleWithShadow('#f59e0b', 'rgba(245, 158, 11, 0.3)');
       }
     }
 
@@ -301,23 +302,130 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     setLogMessage('No execution response yet');
   }, [data.executionResponse, data?.status, data.id, errorMessage]);
 
+  // Log all node data when double-clicked
+  const logNodeData = useCallback(() => {
+    // Create a structured object to log all node data
+    const nodeDataLog = {
+      nodeId: id,
+      nodeType: data?.type || nodeType || id,
+      nodeKind,
+      position: { x: data?.position_x, y: data?.position_y },
+      status: executionStatus,
+      selected,
+      connections: {
+        inputs: connectedInputNodes.map(node => ({
+          id: node.id,
+          type: node.data?.type || node.type
+        })),
+        outputConnections: allEdges?.filter(edge => edge.source === id).map(edge => edge.target) || []
+      },
+      allNodeData: { ...data },
+      originalProperties: data?._originalProperties || [],
+      executionDetails: {
+        status: executionStatus,
+        hasError: !!errorMessage,
+        errorMessage,
+        executionResponse: data.executionResponse
+      }
+    };
+
+    // Log to console with expandable sections
+    console.group(`Node Data: ${id} (${data?.type || nodeType || 'Unknown Type'})`);
+    console.log('📌 Basic Information:', {
+      id,
+      type: data?.type || nodeType,
+      label: data?.label,
+      description: data?.description,
+      nodeKind
+    });
+    console.log('🔄 Current State:', {
+      selected,
+      isExecuting,
+      executionStatus,
+      nodeStatus,
+      hasUnsavedChanges: data?.hasUnsavedChanges
+    });
+    console.log('📝 Complete Node Properties:', data);
+    console.log('🔗 Connections:', {
+      inputNodes: connectedInputNodes,
+      outputTo: allEdges?.filter(edge => edge.source === id).map(edge => edge.target) || []
+    });
+    if (data.executionResponse) {
+      console.log('🚀 Execution Response:', data.executionResponse);
+    }
+    if (errorMessage) {
+      console.error('❌ Error:', errorMessage);
+    }
+    console.log('📊 Node Data Structure:', {
+      originalProperties: data?._originalProperties || [],
+      originalStructure: data?._originalStructure || {}
+    });
+    console.groupEnd();
+
+    return nodeDataLog;
+  }, [
+    id, 
+    data, 
+    nodeType, 
+    nodeKind, 
+    selected, 
+    isExecuting, 
+    executionStatus, 
+    nodeStatus, 
+    errorMessage, 
+    connectedInputNodes, 
+    allEdges
+  ]);
+
   // Event handlers
   const handleDoubleClick = useCallback((event: React.MouseEvent) => {
     event.stopPropagation();
+    
+    // Log all node data
+    const nodeData = logNodeData();
+    console.log('Complete node data on double-click:', nodeData);
+    
+    // Open node settings modal
     setIsModalOpen(true);
-  }, []);
+  }, [logNodeData]);
 
   const handleModalClose = useCallback(() => {
     setIsModalOpen(false);
   }, []);
 
   const handleNodeSave = useCallback((formData: any) => {
-    onNodeDataChange(id, {
-      ...data,
-      ...formData
-    });
+    console.log('Saving node data - before:', data);
+    console.log('New form data to apply:', formData);
+    
+    // Extract essential properties that should be preserved
+    const essentialProps = {
+      id,
+      position_x: data.position_x,
+      position_y: data.position_y,
+      label: data.label,
+      type: data.type,
+    };
+    
+    // Create completely new node data object - no merging with previous data
+    const newNodeData = {
+      ...essentialProps,  // Keep essential properties
+      ...formData         // Add all new parameters
+    };
+    
+    // Add original structure tracking if needed
+    if (data._originalProperties) {
+      // Create new _originalProperties array with only current properties
+      newNodeData._originalProperties = [
+        ...Object.keys(essentialProps),
+        ...Object.keys(formData).filter(key => !Object.keys(essentialProps).includes(key))
+      ];
+    }
+    
+    console.log('Final node data to save (no old properties):', newNodeData);
+    
+    // Apply the changes - completely replacing old data
+    onNodeDataChange(id, newNodeData);
   }, [id, data, onNodeDataChange]);
-
   // Get the background color based on execution status
   const getNodeBackgroundClass = () => {
     if (!executionStatus) return '';

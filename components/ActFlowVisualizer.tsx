@@ -65,7 +65,8 @@ function parseIncrementalContent(content: string, previousNodes = {}): ActConten
       description: '',
       start_node: '' 
     },
-    nodes: { ...previousNodes },
+    // Important: Don't copy all previousNodes - we'll only preserve positions
+    nodes: {},
     edges: [],
     parameters: {},
     settings: {},
@@ -89,25 +90,27 @@ function parseIncrementalContent(content: string, previousNodes = {}): ActConten
       if (currentSection.startsWith('node:')) {
         currentNodeId = currentSection.split(':')[1];
         
-        // Initialize node with essential properties while preserving position if available
+        // Initialize node with only essential properties
+        // Only preserve position from previousNodes if available
         if (!sections.nodes[currentNodeId]) {
+          // Get positions from previousNodes if available, otherwise use random values
+          const position_x = previousNodes[currentNodeId]?.position_x || Math.random() * 500;
+          const position_y = previousNodes[currentNodeId]?.position_y || Math.random() * 500;
+          
           sections.nodes[currentNodeId] = {
             id: currentNodeId,
             label: currentNodeId,
-            position_x: sections.nodes[currentNodeId]?.position_x || Math.random() * 500,
-            position_y: sections.nodes[currentNodeId]?.position_y || Math.random() * 500,
-            _originalProperties: [] // Track original properties to preserve structure
+            position_x,
+            position_y,
+            _originalProperties: ['id', 'label', 'position_x', 'position_y'] // Start with only essential properties
           };
-        } else if (!sections.nodes[currentNodeId]._originalProperties) {
-          // Ensure _originalProperties exists
-          sections.nodes[currentNodeId]._originalProperties = [];
         }
         
         // Initialize the structure tracker for this node
         if (!originalStructure[currentNodeId]) {
           originalStructure[currentNodeId] = {
-            properties: [],
-            order: []
+            properties: ['id', 'label', 'position_x', 'position_y'],
+            order: ['id', 'label', 'position_x', 'position_y']
           };
         }
       } 
@@ -203,6 +206,14 @@ function parseIncrementalContent(content: string, previousNodes = {}): ActConten
     }
   });
 
+  // Log the parsed nodes for debugging
+  console.log("Parsed nodes (no unwanted properties should be here):", 
+    Object.keys(sections.nodes).map(id => ({
+      id,
+      properties: sections.nodes[id]._originalProperties
+    }))
+  );
+
   return sections;
 }
 
@@ -221,8 +232,7 @@ function determineNodeKind(node: any, workflow: any): 'Input' | 'Core' | 'Output
   }
   return 'Default';
 }
-
-// Updated to strictly preserve original content structure
+// Updated to strictly preserve only properties in _originalProperties 
 function getActContentFromFlow(
   nodes: Node[], 
   edges: Edge[], 
@@ -231,22 +241,34 @@ function getActContentFromFlow(
   // Create a deep copy of the original sections to start with
   const sections = JSON.parse(JSON.stringify(originalSections));
   
-  // Update node positions from the flow diagram
+  // Update node positions from the flow diagram and strictly enforce _originalProperties
   nodes.forEach(node => {
     if (sections.nodes[node.id]) {
-      // Only update position and label which are commonly changed in the UI
-      sections.nodes[node.id].position_x = node.position.x;
-      sections.nodes[node.id].position_y = node.position.y;
+      // Create a clean node object with only essential properties
+      const cleanNode = {
+        id: node.id,
+        position_x: node.position.x,
+        position_y: node.position.y,
+      };
       
-      // Only update label if it's different
-      if (node.data.label && node.data.label !== sections.nodes[node.id].label) {
-        sections.nodes[node.id].label = node.data.label;
-      }
+      // Get the list of properties that should be included (and ensure it exists)
+      const propertiesToKeep = Array.isArray(node.data._originalProperties) 
+        ? [...node.data._originalProperties] 
+        : ['id', 'position_x', 'position_y', 'type', 'label'];
       
-      // Only update type if it's different
-      if (node.data.type && node.data.type !== sections.nodes[node.id].type) {
-        sections.nodes[node.id].type = node.data.type;
-      }
+      // Add _originalProperties to the clean node
+      cleanNode._originalProperties = propertiesToKeep;
+      
+      // ONLY copy properties that are explicitly listed in _originalProperties
+      propertiesToKeep.forEach(propName => {
+        if (propName !== 'id' && propName !== 'position_x' && propName !== 'position_y' && !propName.startsWith('_')) {
+          // Copy the property from node.data to ensure we get the latest value
+          cleanNode[propName] = node.data[propName];
+        }
+      });
+      
+      // Replace the node in sections with this clean version that only has allowed properties
+      sections.nodes[node.id] = cleanNode;
     }
   });
   
@@ -262,14 +284,14 @@ function getActContentFromFlow(
     sections.workflow.start_node = startNode.id;
   }
   
-  // Generate the content string based on the original sections
+  // Generate the content string based on the sections
   let content = '';
   
   // Add parameters section if it exists
   if (sections.parameters && Object.keys(sections.parameters).length > 0) {
     content += '[parameters]\n';
     for (const [key, value] of Object.entries(sections.parameters)) {
-      // Format exactly as in the original
+      // Format correctly based on value type
       if (typeof value === 'string') {
         if (value.startsWith('${') && value.endsWith('}')) {
           content += `${key} = ${value}\n`;
@@ -296,16 +318,21 @@ function getActContentFromFlow(
   }
   content += '\n';
   
-  // Add node sections
+  // Add node sections - with strict property filtering
   for (const [nodeId, nodeData] of Object.entries(sections.nodes)) {
     content += `[node:${nodeId}]\n`;
     
-    // Only include non-internal properties
+    // Get list of properties to include (excluding internal ones)
+    const propertiesToInclude = (nodeData._originalProperties || [])
+      .filter(prop => !prop.startsWith('_'));
+    
+    // Only include properties that are in the _originalProperties array
     Object.entries(nodeData)
-      .filter(([key]) => !key.startsWith('_'))
+      .filter(([key]) => !key.startsWith('_') && propertiesToInclude.includes(key))
       .forEach(([key, value]) => {
         if (value === undefined || value === '') return;
         
+        // Format the value based on its type
         if (typeof value === 'string') {
           if (value.startsWith('${') && value.includes('}')) {
             content += `${key} = ${value}\n`;
@@ -368,7 +395,6 @@ function getActContentFromFlow(
   
   return content;
 }
-
 export function isActContent(content: string): boolean {
   if (!content) return false;
   return (
@@ -638,51 +664,65 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     setHasUnsavedChanges(true);
   }, [setNodes, generateNodeId]);
 
-  // Handle node data changes from BaseNode component
   const handleNodeDataChange = useCallback((id: string, newData: any) => {
-    console.log("Node data changed:", id, newData);
+  console.log("Node data completely replaced:", id, newData);
+  
+  // For React Flow nodes state - completely replace data
+  setNodes(nds => 
+    nds.map(node => {
+      if (node.id === id) {
+        // Keep only position and id, replace all other data
+        return { 
+          ...node, 
+          data: {
+            id: node.id,
+            // Add only the new data properties
+            ...newData
+          } 
+        };
+      }
+      return node;
+    })
+  );
+  
+  // For previousNodesRef - completely replace all parameters
+  if (previousNodesRef.current[id]) {
+    // Keep only essential positioning properties
+    const position_x = previousNodesRef.current[id].position_x;
+    const position_y = previousNodesRef.current[id].position_y;
     
-    setNodes(nds => 
-      nds.map(node => 
-        node.id === id 
-          ? { ...node, data: { ...node.data, ...newData } } 
-          : node
-      )
-    );
+    // Create a completely new object with just position and ID
+    previousNodesRef.current[id] = {
+      id: id,
+      position_x: position_x,
+      position_y: position_y,
+      // Add all new properties
+      ...newData,
+      // Create new empty originalProperties array to track only new properties
+      _originalProperties: Object.keys(newData)
+    };
+  }
+  
+  // Do the same for originalSectionsRef
+  if (originalSectionsRef.current && originalSectionsRef.current.nodes[id]) {
+    // Keep only essential positioning properties
+    const position_x = originalSectionsRef.current.nodes[id].position_x;
+    const position_y = originalSectionsRef.current.nodes[id].position_y;
     
-    // Update previousNodesRef for consistency
-    if (previousNodesRef.current[id]) {
-      Object.entries(newData).forEach(([key, value]) => {
-        previousNodesRef.current[id][key] = value;
-        
-        // Add to _originalProperties if not already there
-        if (!previousNodesRef.current[id]._originalProperties) {
-          previousNodesRef.current[id]._originalProperties = [];
-        }
-        if (!previousNodesRef.current[id]._originalProperties.includes(key)) {
-          previousNodesRef.current[id]._originalProperties.push(key);
-        }
-      });
-    }
-    
-    // Update the original sections ref for this node
-    if (originalSectionsRef.current && originalSectionsRef.current.nodes[id]) {
-      Object.entries(newData).forEach(([key, value]) => {
-        originalSectionsRef.current.nodes[id][key] = value;
-        
-        // Add to _originalProperties if not already there
-        if (!originalSectionsRef.current.nodes[id]._originalProperties) {
-          originalSectionsRef.current.nodes[id]._originalProperties = [];
-        }
-        if (!originalSectionsRef.current.nodes[id]._originalProperties.includes(key)) {
-          originalSectionsRef.current.nodes[id]._originalProperties.push(key);
-        }
-      });
-    }
-    
-    setHasUnsavedChanges(true);
-  }, [setNodes]);
-
+    // Create a completely new object with just position and ID
+    originalSectionsRef.current.nodes[id] = {
+      id: id,
+      position_x: position_x,
+      position_y: position_y,
+      // Add all new properties
+      ...newData,
+      // Create new empty originalProperties array to track only new properties
+      _originalProperties: Object.keys(newData)
+    };
+  }
+  
+  setHasUnsavedChanges(true);
+}, [setNodes]);
   // Handle node deletion
   const handleNodeDelete = useCallback((id: string) => {
     console.log("Deleting node:", id);

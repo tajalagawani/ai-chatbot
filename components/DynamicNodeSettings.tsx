@@ -1,32 +1,13 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Save, Play, AlertCircle, ChevronDown, ChevronUp, Search } from 'lucide-react';
-import { OptionBadges } from './OperationBadges';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Save, Play, AlertCircle } from 'lucide-react';
 import OperationsDropdown from './OperationsDropdown';
-import NodePanelHeader from './NodePanelHeader';
+import { FieldRenderer, OperationParameter } from './FieldComponents';
 
 // shadcn components
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-
-// Type definitions
-interface OperationParameter {
-  name: string;
-  type: string;
-  description: string;
-  required: boolean;
-  default: any;
-  enum: string[] | null;
-  min_value: number | null;
-  max_value: number | null;
-  pattern: string | null;
-  operation_specific?: boolean;
-}
+import { Badge } from '@/components/ui/badge';
 
 interface OperationParams {
   operation_specific: Record<string, OperationParameter>;
@@ -60,19 +41,16 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
   onSave, 
   onExecutionComplete
 }) => {
-  // Extract node type from the data and format it
-  const rawNodeType = nodeData?.type || 'unknown';
+  // Extract node type from the data
+  const nodeType = useMemo(() => nodeData?.type || 'unknown', [nodeData?.type]);
   
-  // Format node type - convert camelCase to lowercase simple name
-  const formatNodeType = (type: string): string => {
-    // Handle empty or unknown types
-    if (!type || type === 'unknown') return 'unknown';
+  // Format node type for API calls
+  const apiNodeType = useMemo(() => {
+    if (!nodeType || nodeType === 'unknown') return 'unknown';
     
-    // Extract the core name by finding common patterns
+    // Handle common patterns
     const commonSuffixes = /(Node|Assistant|Api|Service|Provider|Generator|Processor)$/i;
-    
-    // Remove the suffixes
-    let simplified = type.replace(commonSuffixes, '');
+    let simplified = nodeType.replace(commonSuffixes, '');
     
     // Handle special cases
     if (simplified.toLowerCase() === 'openai') return 'openai';
@@ -80,155 +58,100 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
     
     // Convert camelCase to lowercase
     return simplified.toLowerCase();
-  };
+  }, [nodeType]);
   
-  const nodeType = formatNodeType(rawNodeType);
-  
-  // State for the component
+  // State management - with optimized initial states
   const [operations, setOperations] = useState<string[]>([]);
   const [selectedOperation, setSelectedOperation] = useState<string>('');
+  const [currentOperation, setCurrentOperation] = useState<string>('');
   const [operationDetails, setOperationDetails] = useState<Operation | null>(null);
-  const [formData, setFormData] = useState<any>(nodeData?.formData || {});
-  const [loading, setLoading] = useState<boolean>(false);
+  const [formData, setFormData] = useState<any>({});
+  const [loading, setLoading] = useState<boolean>(true);
   const [loadingOperation, setLoadingOperation] = useState<boolean>(false);
   const [executingNode, setExecutingNode] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [scrolledTop, setScrolledTop] = useState<boolean>(true);
-  const [scrolledBottom, setScrolledBottom] = useState<boolean>(true);
+  const [apiDefinedFields, setApiDefinedFields] = useState<Set<string>>(new Set());
+  const [initialLoadComplete, setInitialLoadComplete] = useState<boolean>(false);
   
-  // Refs
-  const contentRef = useRef<HTMLDivElement>(null);
+  // Use a ref to hold the local form values without causing re-renders
+  const formValuesRef = useRef<any>({});
 
-  // Handle scroll event to show/hide shadows
-  const handleScroll = () => {
-    if (contentRef.current) {
-      const { scrollTop, scrollHeight, clientHeight } = contentRef.current;
-      setScrolledTop(scrollTop <= 5);
-      setScrolledBottom(scrollTop + clientHeight >= scrollHeight - 5);
-    }
-  };
+  // Extract essential props that should remain separate from operation data
+  const essentialProps = useMemo(() => ['id', 'position_x', 'position_y', 'label', 'type'], []);
   
-  // Add scroll event listener
-  useEffect(() => {
-    const contentElement = contentRef.current;
-    if (contentElement) {
-      contentElement.addEventListener('scroll', handleScroll);
-      // Check initial scroll state
-      handleScroll();
-    }
-    return () => {
-      if (contentElement) {
-        contentElement.removeEventListener('scroll', handleScroll);
+  // Process node data into initial form data - run only once and memoize result
+  const initialFormData = useMemo(() => {
+    if (!nodeData) return {};
+    
+    // Extract operation parameters from nodeData
+    const operationParams = { ...nodeData };
+    essentialProps.forEach(prop => delete operationParams[prop]);
+    
+    // Remove internal properties
+    Object.keys(operationParams).forEach(key => {
+      if (key.startsWith('_') || key === 'nodeKind' || key === 'executionResponse' || key === 'status') {
+        delete operationParams[key];
       }
-    };
-  }, [operationDetails]);
-
-  // Fetch available operations when component mounts
+    });
+    
+    console.log("Processed initial form data:", operationParams);
+    return operationParams;
+  }, [nodeData, essentialProps]);
+  
+  // Initialize form data from processed initial data - only when component mounts
   useEffect(() => {
-    const fetchOperations = async () => {
-      setLoading(true);
-      setError(null);
+    if (!initialLoadComplete) {
+      console.log("Initializing form data from:", initialFormData);
+      setFormData(initialFormData);
+      formValuesRef.current = {...initialFormData};
       
-      try {
-        console.log(`Fetching operations for node type: ${nodeType}`);
-        const response = await fetch(`${API_BASE_URL}/nodes/${nodeType}/operations`);
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch operations for ${nodeType} (HTTP ${response.status})`);
-        }
-        
-        const data = await response.json();
-        console.log(`Received operations data:`, data);
-        
-        // Handle different response formats
-        let operationsList = [];
-        
-        if (data.operations && typeof data.operations === 'object') {
-          // Extract operations from the operations object in the response
-          operationsList = Object.keys(data.operations);
-        } else if (data.operations_count > 0) {
-          // Extract from our Flask API's specific format
-          operationsList = Object.keys(data.operations || {});
-        } else if (Array.isArray(data)) {
-          // Direct array of operations
-          operationsList = data;
-        } else if (typeof data === 'object' && data !== null) {
-          // Maybe operations are directly in the response object
-          operationsList = Object.keys(data).filter(key => 
-            typeof data[key] === 'object' && 
-            data[key] !== null && 
-            !key.startsWith('_')
-          );
-        }
-        
-        console.log(`Processed operations list:`, operationsList);
-        
-        if (operationsList.length > 0) {
-          setOperations(operationsList);
-          
-          // Set initial operation if exists in node data
-          if (nodeData?.formData?.operation) {
-            setSelectedOperation(nodeData.formData.operation);
-            fetchOperationDetails(nodeData.formData.operation);
-          } else {
-            setSelectedOperation(operationsList[0]);
-            fetchOperationDetails(operationsList[0]);
-          }
-        } else {
-          console.warn(`No operations found for node type: ${nodeType}`);
-          setOperations([]);
-        }
-      } catch (err) {
-        console.error("Error fetching operations:", err);
-        setError(`Failed to load operations: ${err.message}`);
-        setOperations([]);
-      } finally {
-        setLoading(false);
+      // Set initial operation if available
+      if (initialFormData.operation) {
+        setSelectedOperation(initialFormData.operation);
+        setCurrentOperation(initialFormData.operation);
       }
-    };
-
-    if (nodeType && nodeType !== 'unknown') {
-      fetchOperations();
+      
+      setInitialLoadComplete(true);
     }
-  }, [nodeType, nodeData]);
+  }, [initialFormData, initialLoadComplete]);
 
-  // Fetch details for specific operation
+  // Define fetchOperationDetails before it's used in any dependency arrays
   const fetchOperationDetails = useCallback(async (operation: string) => {
-    if (!operation || !nodeType) return;
+    if (!operation || !apiNodeType || apiNodeType === 'unknown') return;
     
     setLoadingOperation(true);
     setError(null);
     
     try {
-      console.log(`Fetching details for operation: ${operation} (node type: ${nodeType})`);
-      const response = await fetch(`${API_BASE_URL}/nodes/${nodeType}/operations/${operation}`);
+      console.log(`Fetching details for operation: ${operation}`);
+      const response = await fetch(`${API_BASE_URL}/nodes/${apiNodeType}/operations/${operation}`);
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch details for operation: ${operation} (HTTP ${response.status})`);
+        throw new Error(`Failed to fetch operation details (HTTP ${response.status})`);
       }
       
       const data = await response.json();
-      console.log(`Received operation details:`, data);
       
-      // Adapt the API response to our expected Operation format
-      const processedOperationDetails: Operation = {
+      // Process the API response into our expected format
+      const processedOperation: Operation = {
         name: operation,
-        description: data.note || `${operation} operation for ${nodeType}`,
-        type: nodeType,
+        description: data.note || data.description || `${operation} operation`,
+        type: apiNodeType,
         implemented: true,
-        documentation: "",
+        documentation: data.documentation || "",
         parameters: {
           common: {},
           operation_specific: {}
         },
-        example: {}
+        example: data.example || {}
       };
       
-      // Process parameters from the API response
+      // Convert parameters from API format
+      const parameterFields = new Set<string>();
+      parameterFields.add('operation'); // Always include operation
+      
       if (Array.isArray(data.parameters)) {
-        // Convert parameters array to our required format
         data.parameters.forEach((param: any) => {
-          // Skip the operation parameter itself in the form fields
           if (param.name === 'operation') return;
           
           const processedParam: OperationParameter = {
@@ -244,584 +167,477 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
             operation_specific: true
           };
           
-          processedOperationDetails.parameters.operation_specific[param.name] = processedParam;
+          processedOperation.parameters.operation_specific[param.name] = processedParam;
+          parameterFields.add(param.name);
         });
       }
       
-      console.log("Processed operation details:", processedOperationDetails);
-      setOperationDetails(processedOperationDetails);
+      setOperationDetails(processedOperation);
+      setApiDefinedFields(parameterFields);
       
-      // Initialize form with defaults from the operation details
-      const initialFormValues = { 
-        ...formData,
-        operation: operation 
-      };
+      // If operation changed, reset form data to keep only relevant fields
+      const isOperationChange = operation !== currentOperation;
       
-      // Add default values for parameters
-      Object.entries(processedOperationDetails.parameters.operation_specific).forEach(([key, param]: [string, any]) => {
-        if (formData[key] === undefined && param.default !== null) {
-          initialFormValues[key] = param.default;
-        }
-      });
-      
-      setFormData(initialFormValues);
+      if (isOperationChange) {
+        console.log(`Operation changed from ${currentOperation} to ${operation}, updating form data`);
+        
+        // Create new form data with only the operation field
+        const newFormData = { operation };
+        
+        // For all API-defined parameters:
+        // 1. Use value from current node if operation is the same
+        // 2. Use API default for new operation
+        Object.entries(processedOperation.parameters.operation_specific).forEach(([key, param]) => {
+          if (isOperationChange || !formData[key]) {
+            // For new operation or missing field, use default
+            if (param.default !== null) {
+              newFormData[key] = param.default;
+            }
+          } else {
+            // For existing fields in same operation, keep current value
+            newFormData[key] = formData[key];
+          }
+        });
+        
+        console.log("New form data after operation change:", newFormData);
+        setFormData(newFormData);
+        formValuesRef.current = {...newFormData};
+        setCurrentOperation(operation);
+      }
     } catch (err) {
       console.error("Error fetching operation details:", err);
       setError(`Failed to load operation details: ${err.message}`);
     } finally {
       setLoadingOperation(false);
     }
-  }, [nodeType, formData]);
+  }, [apiNodeType, currentOperation, formData]);
+
+  // Fetch available operations from API
+  useEffect(() => {
+    const fetchOperations = async () => {
+      if (!apiNodeType || apiNodeType === 'unknown') return;
+      
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const operationsPromise = fetch(`${API_BASE_URL}/nodes/${apiNodeType}/operations`)
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`Failed to fetch operations (HTTP ${response.status})`);
+            }
+            return response.json();
+          });
+        
+        // Set a timeout to prevent UI freezing
+        const timeoutPromise = new Promise(resolve => 
+          setTimeout(() => resolve({ timeout: true }), 5000)
+        );
+        
+        // Race between fetching data and timeout
+        const result: any = await Promise.race([operationsPromise, timeoutPromise]);
+        
+        // If timeout occurred, keep loading but don't block UI
+        if (result.timeout) {
+          console.warn("Operations fetch taking longer than expected, continuing in background");
+          
+          // Continue fetching in background
+          operationsPromise.then(data => {
+            processOperationsData(data);
+            setLoading(false);
+          }).catch(err => {
+            console.error("Background operations fetch error:", err);
+            setError(`Failed to load operations: ${err.message}`);
+            setLoading(false);
+          });
+          
+          return;
+        }
+        
+        processOperationsData(result);
+      } catch (err) {
+        console.error("Error fetching operations:", err);
+        setError(`Failed to load operations: ${err.message}`);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Function to process operations data with consistent handling for different formats
+    const processOperationsData = (data: any) => {
+      // Extract operations list based on response format
+      let operationsList = [];
+      
+      if (data.operations && typeof data.operations === 'object') {
+        operationsList = Object.keys(data.operations);
+      } else if (data.operations_count > 0) {
+        operationsList = Object.keys(data.operations || {});
+      } else if (Array.isArray(data)) {
+        operationsList = data;
+      } else if (typeof data === 'object' && data !== null) {
+        operationsList = Object.keys(data).filter(key => 
+          typeof data[key] === 'object' && 
+          data[key] !== null && 
+          !key.startsWith('_')
+        );
+      }
+      
+      console.log(`Available operations:`, operationsList);
+      
+      if (operationsList.length > 0) {
+        setOperations(operationsList);
+        
+        // Initialize with operation from form data or first available
+        const initialOperation = formData.operation || operationsList[0];
+        if (initialOperation) {
+          setSelectedOperation(initialOperation);
+          fetchOperationDetails(initialOperation);
+        }
+      } else {
+        console.warn(`No operations found for ${apiNodeType}`);
+        setOperations([]);
+      }
+    };
+
+    if (apiNodeType && initialLoadComplete) {
+      fetchOperations();
+    }
+  }, [apiNodeType, formData.operation, initialLoadComplete, fetchOperationDetails]);
 
   // Handle operation change
-  const handleOperationChange = (operation) => {
+  const handleOperationChange = (operation: string) => {
+    if (operation === selectedOperation) return;
+    
+    // Confirm if there are unsaved changes
+    if (!confirm("Changing operations will reset your changes. Continue?")) {
+      return;
+    }
+    
+    console.log(`Changing operation to: ${operation}`);
     setSelectedOperation(operation);
     fetchOperationDetails(operation);
-    
-    // Update the operation in the form data
-    setFormData(prev => ({
-      ...prev,
-      operation: operation
-    }));
   };
 
-  // Handle form field changes
-  const handleInputChange = (paramName, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [paramName]: value
-    }));
+  // Handle form field changes - now using the ref instead of state
+  const handleInputChange = (paramName: string, value: any) => {
+    formValuesRef.current[paramName] = value;
   };
 
-  // Handle form submission
-  const handleSubmit = (event) => {
-    if (event) event.preventDefault();
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
     
-    onSave({
-      ...nodeData,
-      formData: formData
+    // Create an object with just the essential node properties
+    const essentialNodeProps = {};
+    
+    // Copy essential properties from original node data
+    essentialProps.forEach(prop => {
+      if (nodeData[prop] !== undefined) {
+        essentialNodeProps[prop] = nodeData[prop];
+      }
     });
+    
+    // Get the valid parameters for current operation ONLY
+    const validParameters = new Set(['operation']);
+    if (operationDetails?.parameters?.operation_specific) {
+      Object.keys(operationDetails.parameters.operation_specific).forEach(key => {
+        validParameters.add(key);
+      });
+    }
+    
+    // Create a clean form data object with ONLY valid parameters
+    const cleanFormData = {};
+    Object.keys(formValuesRef.current).forEach(key => {
+      // Only include parameters that are valid for the current operation
+      if (validParameters.has(key)) {
+        cleanFormData[key] = formValuesRef.current[key];
+      }
+    });
+    
+    // Create a COMPLETELY NEW _originalProperties array with ONLY current valid properties
+    const newOriginalProperties = [
+      ...essentialProps.filter(prop => nodeData[prop] !== undefined),
+      ...Object.keys(cleanFormData)
+    ];
+    
+    // Combine essential properties with clean form data
+    const completeNodeData = {
+      ...essentialNodeProps,
+      ...cleanFormData,
+      // Add the NEW _originalProperties array 
+      _originalProperties: newOriginalProperties
+    };
+    
+    console.log("Saving node with clean data:", completeNodeData);
+    console.log("Removed obsolete properties:", 
+      Object.keys(formValuesRef.current).filter(key => !validParameters.has(key))
+    );
+    console.log("New _originalProperties:", newOriginalProperties);
+    
+    // Update the form data state to match the cleaned data
+    setFormData({...cleanFormData});
+    
+    // Call the parent's save function with completely clean data
+    onSave(completeNodeData);
   };
 
-  // Handle executing the node
+  // Execute the node with current parameters
   const handleExecute = async () => {
     setExecutingNode(true);
     setError(null);
     
     try {
-      // Adjust this endpoint to match your Flask API structure
-      const response = await fetch(`${API_BASE_URL}/execute/${nodeType}`, {
+      console.log(`Executing ${apiNodeType} with params:`, formValuesRef.current);
+      
+      const response = await fetch(`${API_BASE_URL}/execute/${apiNodeType}`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(formData)
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to execute node');
-      }
-      
-      const result = await response.json();
-      
-      if (onExecutionComplete) {
-        onExecutionComplete(result);
-      }
-    } catch (err) {
-      console.error("Error executing node:", err);
-      setError(`Execution failed: ${err.message}`);
-    } finally {
-      setExecutingNode(false);
-    }
-  };
-
-  // Render form fields based on parameter type
-  const renderField = (param: OperationParameter, key: string) => {
-    const value = formData[key] !== undefined ? formData[key] : param.default;
-    
-    switch (param.type) {
-      case 'string':
-        if (param.enum) {
-          return (
-            <div className="space-y-2 mb-6" key={key}>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor={key} className="flex items-center text-base">
-                      {param.name}
-                      {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="max-w-xs">{param.description}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              
-              <div className="mt-1">
-                <OptionBadges
-                  options={param.enum}
-                  selectedOption={value}
-                  onSelect={(option) => handleInputChange(key, option)}
-                  size="sm"
-                  variant="rounded"
-                />
-              </div>
-            </div>
-          );
-        } else if (key === 'system' || key === 'prompt' || (param.name && param.name.toLowerCase().includes('prompt'))) {
-          return (
-            <div className="space-y-2 mb-6" key={key}>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor={key} className="flex items-center text-base">
-                      {param.name}
-                      {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="max-w-xs">{param.description}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              
-              <div className="mt-1">
-                <Textarea
-                  id={key}
-                  value={value || ''}
-                  onChange={(e) => handleInputChange(key, e.target.value)}
-                  placeholder={param.description}
-                  rows={5}
-                  className="w-full bg-background dark:bg-[#0f0f10] text-foreground dark:text-white hover:bg-background dark:hover:bg-[#0f0f10] 
-                            focus:bg-background dark:focus:bg-[#0f0f10] border-input dark:border-zinc-800 transition-colors duration-200"
-                />
-              </div>
-            </div>
-          );
-        } else {
-          return (
-            <div className="space-y-2 mb-6" key={key}>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor={key} className="flex items-center text-base">
-                      {param.name}
-                      {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="max-w-xs">{param.description}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              
-              <div className="m-1 ">
-                <Input
-                  id={key}
-                  type="text"
-                  value={value || ''}
-                  onChange={(e) => handleInputChange(key, e.target.value)}
-                  placeholder={param.description}
-                  required={param.required}
-                  className="bg-background dark:bg-[#0f0f10] text-foreground dark:text-white hover:bg-background dark:hover:bg-[#0f0f10] 
-                             focus:bg-background dark:focus:bg-[#0f0f10] border-input dark:border-zinc-800 transition-colors duration-200 p-1 "
-                />
-              </div>
-            </div>
-          );
+          body: JSON.stringify(formValuesRef.current)
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to execute node');
         }
         
-      case 'number':
-        if (param.min_value !== null && param.max_value !== null) {
-          return (
-            <div className="space-y-2 mb-6" key={key}>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor={key} className="flex items-center justify-between text-base">
-                      <span>
-                        {param.name}
-                        {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                      </span>
-                      <span className="text-sm text-muted-foreground text-gray-300">
-                        {value || param.default}
-                      </span>
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="max-w-xs">{param.description}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              
-              <div className="mt-1 px-1">
-                <Slider
-                  id={key}
-                  min={param.min_value}
-                  max={param.max_value}
-                  step={param.name === 'temperature' || param.name === 'top_p' ? 0.1 : 1}
-                  value={[value !== undefined && value !== null ? value : param.default]}
-                  onValueChange={(vals) => handleInputChange(key, vals[0])}
-                />
-              </div>
-            </div>
-          );
-        } else {
-          return (
-            <div className="space-y-2 mb-6" key={key}>
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor={key} className="flex items-center text-base">
-                      {param.name}
-                      {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="max-w-xs">{param.description}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-              
-              <div className="mt-1">
-                <Input
-                  id={key}
-                  type="number"
-                  value={value !== undefined && value !== null ? value : ''}
-                  onChange={(e) => {
-                    const val = e.target.value === '' ? '' : Number(e.target.value);
-                    handleInputChange(key, val);
-                  }}
-                  placeholder={param.description}
-                  required={param.required}
-                  min={param.min_value !== null ? param.min_value : undefined}
-                  max={param.max_value !== null ? param.max_value : undefined}
-                  className="bg-background dark:bg-[#0f0f10] text-foreground dark:text-white hover:bg-background dark:hover:bg-[#0f0f10] 
-                             focus:bg-background dark:focus:bg-[#0f0f10] border-input dark:border-zinc-800 transition-colors duration-200"
-                />
-              </div>
-            </div>
-          );
+        const result = await response.json();
+        console.log("Execution result:", result);
+        
+        if (onExecutionComplete) {
+          onExecutionComplete(result);
         }
-        
-      case 'boolean':
-        return (
-          <div className="flex items-center justify-between mb-6" key={key}>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Label htmlFor={key} className="flex items-center text-base">
-                    {param.name}
-                    {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                  </Label>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p className="max-w-xs">{param.description}</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            
-            <Switch
-              id={key}
-              checked={value || false}
-              onCheckedChange={(checked) => handleInputChange(key, checked)}
-            />
-          </div>
-        );
-        
-      case 'array':
-        return (
-          <div className="space-y-2 mb-6" key={key}>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Label htmlFor={key} className="flex items-center text-base">
-                    {param.name}
-                    {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                  </Label>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p className="max-w-xs">{param.description}</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            
-            <div className="mt-1">
-              <Textarea
-                id={key}
-                value={value ? JSON.stringify(value, null, 2) : ''}
-                onChange={(e) => {
-                  try {
-                    const parsed = e.target.value ? JSON.parse(e.target.value) : [];
-                    handleInputChange(key, parsed);
-                  } catch (err) {
-                    // Show validation error, but still update the raw text
-                    console.warn("Invalid JSON for array input:", err);
-                  }
-                }}
-                placeholder={`Enter JSON array: ${param.description}`}
-                rows={3}
-                className="font-mono text-sm bg-background dark:bg-[#0f0f10] text-foreground dark:text-white 
-                          hover:bg-background dark:hover:bg-[#0f0f10] focus:bg-background dark:focus:bg-[#0f0f10] 
-                          border-input dark:border-zinc-800 transition-colors duration-200"
-              />
-            </div>
-          </div>
-        );
-        
-      case 'object':
-        return (
-          <div className="space-y-2 mb-6" key={key}>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Label htmlFor={key} className="flex items-center text-base">
-                    {param.name}
-                    {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                  </Label>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p className="max-w-xs">{param.description}</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            
-            <div className="mt-1">
-              <Textarea
-                id={key}
-                value={value ? JSON.stringify(value, null, 2) : ''}
-                onChange={(e) => {
-                  try {
-                    const parsed = e.target.value ? JSON.parse(e.target.value) : {};
-                    handleInputChange(key, parsed);
-                  } catch (err) {
-                    // Show validation error, but still update the raw text
-                    console.warn("Invalid JSON for object input:", err);
-                  }
-                }}
-                placeholder={`Enter JSON object: ${param.description}`}
-                rows={3}
-                className="font-mono text-sm bg-background dark:bg-[#0f0f10] text-foreground dark:text-white 
-                          hover:bg-background dark:hover:bg-[#0f0f10] focus:bg-background dark:focus:bg-[#0f0f10] 
-                          border-input dark:border-zinc-800 transition-colors duration-200"
-              />
-            </div>
-          </div>
-        );
-        
-      default:
-        return (
-          <div className="space-y-2 mb-6" key={key}>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Label htmlFor={key} className="flex items-center text-base">
-                    {param.name}
-                    {param.required && <span className="text-red-500 ml-1 font-bold text-lg">*</span>}
-                  </Label>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p className="max-w-xs">{param.description}</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            
-            <div className="mt-1">
-              <Input
-                id={key}
-                type="text"
-                value={value || ''}
-                onChange={(e) => handleInputChange(key, e.target.value)}
-                placeholder={param.description}
-                required={param.required}
-                className="bg-background dark:bg-[#0f0f10] text-foreground dark:text-white hover:bg-background dark:hover:bg-[#0f0f10] 
-                          focus:bg-background dark:focus:bg-[#0f0f10] border-input dark:border-zinc-800 transition-colors duration-200"
-              />
-            </div>
-          </div>
-        );
-    }
-  };
-
-  // Helper function to get all fields for the current operation
-  const getAllFields = () => {
-    if (!operationDetails) return [];
-    
-    const fields = [];
-    
-    // First add all required parameters
-    if (operationDetails.parameters.operation_specific) {
+      } catch (err) {
+        console.error("Error executing node:", err);
+        setError(`Execution failed: ${err.message}`);
+      } finally {
+        setExecutingNode(false);
+      }
+    };
+  
+    // Sort and organize parameters for display - memoized to prevent recalculation
+    const organizedFields = useMemo(() => {
+      if (!operationDetails?.parameters?.operation_specific) return [];
+      
+      const fields = [];
+      
+      // First add all required parameters
       Object.entries(operationDetails.parameters.operation_specific)
         .filter(([key, param]) => param.required && key !== 'operation')
         .forEach(([key, param]) => {
           fields.push({ key, param });
         });
-    }
-    
-    // Then add all optional parameters
-    if (operationDetails.parameters.operation_specific) {
+      
+      // Then add all optional parameters
       Object.entries(operationDetails.parameters.operation_specific)
         .filter(([key, param]) => !param.required && key !== 'operation')
-        .sort((a, b) => {
-          // Sort by parameter name
-          return a[0].localeCompare(b[0]);
-        })
+        .sort((a, b) => a[0].localeCompare(b[0]))
         .forEach(([key, param]) => {
           fields.push({ key, param });
         });
-    }
-    
-    return fields;
-  };
-
-  // Render loading state
-  if (loading) {
-    return (
-      <div className="h-full overflow-auto text-foreground dark:text-white">
-        <NodePanelHeader nodeType={rawNodeType} nodeData={nodeData} />
-        <div className="flex justify-center items-center py-16">
-          <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full"></div>
-          <span className="ml-3">Loading operations...</span>
+      
+      return fields;
+    }, [operationDetails]);
+  
+    // Check if current form has obsolete properties - memoized
+    const obsoleteProps = useMemo(() => {
+      if (!operationDetails) return [];
+      
+      const validFields = new Set(['operation']);
+      Object.keys(operationDetails.parameters.operation_specific).forEach(key => {
+        validFields.add(key);
+      });
+      
+      return Object.keys(formValuesRef.current).filter(key => !validFields.has(key));
+    }, [operationDetails]);
+  
+    // Render a skeleton UI while loading initial data
+    const renderSkeleton = () => (
+      <div>
+        <div className="h-6 w-24 bg-gray-700 rounded animate-pulse mb-4"></div>
+        <div className="h-10 w-full bg-gray-700 rounded animate-pulse mb-6"></div>
+        <div className="space-y-6">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="space-y-2">
+              <div className="h-4 w-32 bg-gray-700 rounded animate-pulse"></div>
+              <div className="h-10 w-full bg-gray-700 rounded animate-pulse"></div>
+            </div>
+          ))}
         </div>
       </div>
     );
-  }
-
-  return (
-    <div className="h-full flex flex-col text-foreground dark:text-white">
-      {/* Sticky header */}
-      <div className="sticky top-0 z-10 bg-background dark:bg-[#09090b] ">
-        <NodePanelHeader nodeType={rawNodeType} nodeData={nodeData} />
-        {/* Top shadow when scrolled */}
-        <div className={`h-2 bg-gradient-to-b from-gray-900/20 to-transparent absolute bottom-0 left-0 right-0 transform translate-y-full z-10 pointer-events-none transition-opacity duration-200 ${scrolledTop ? 'opacity-0' : 'opacity-100'}`}></div>
-      </div>
-      
-      {/* Scrollable content including operations section */}
-      <div 
-        ref={contentRef}
-        className="flex-1 overflow-auto relative scroll-smooth"
-        onScroll={handleScroll}
-      >
-        <div className="">
-          {error && (
-            <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          
-          {operations.length > 0 && (
-            <div className="mb-4">
-              <OperationsDropdown
-                operations={operations}
-                selectedOperation={selectedOperation}
-                onSelect={handleOperationChange}
-                label="Available Operations"
-                placeholder="Search operations..."
-              />
+  
+    // Early render for loading state with skeleton UI
+    if (loading && !initialLoadComplete) {
+      return (
+        <div className="h-full overflow-auto text-foreground dark:text-white p-4">
+          <div className="pb-3">
+            <h3 className="text-lg font-medium mb-1">
+              {nodeType || 'Node'} Settings
+            </h3>
+            <p className="text-sm text-muted-foreground dark:text-gray-300">
+              Loading parameters...
+            </p>
+          </div>
+          {renderSkeleton()}
+        </div>
+      );
+    }
+  
+    return (
+      <div className="h-full overflow-auto text-foreground dark:text-white">
+        <div className="pb-3 flex justify-between items-center">
+          <div>
+            <h3 className="text-lg font-medium mb-1">
+              {nodeType || 'Node'} Settings
+            </h3>
+            <p className="text-sm text-muted-foreground dark:text-gray-300">
+              Configure node parameters for {selectedOperation || 'this operation'}
+            </p>
+          </div>
+        </div>
+        
+        {error && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        
+        {operations.length > 0 && (
+          <OperationsDropdown
+            operations={operations}
+            selectedOperation={selectedOperation}
+            onSelect={handleOperationChange}
+            label="Available Operations"
+            placeholder="Search operations..."
+          />
+        )}
+        
+        {loadingOperation ? (
+          <div className="flex flex-col gap-4 py-2">
+            <div className="flex justify-start items-center py-2">
+              <div className="animate-spin w-5 h-5 border-2 border-primary border-t-transparent rounded-full mr-2"></div>
+              <span>Loading operation parameters...</span>
             </div>
-          )}
-          
-          {/* Description area */}
-          {operationDetails?.description && (
-            <div className="bg-muted dark:bg-[#0f0f10] p-3 rounded-md border border-input dark:border-zinc-800 mb-4">
-              <p className="text-sm text-muted-foreground dark:text-gray-300">{operationDetails.description}</p>
-            </div>
-          )}
-          
-          {/* Required notice */}
-          {operationDetails && (
+            {renderSkeleton()}
+          </div>
+        ) : operationDetails ? (
+          <form onSubmit={handleSubmit} className="mt-4">
+            {/* Operation description */}
+            {operationDetails.description && (
+              <div className="bg-muted dark:bg-[#0f0f10] p-3 rounded-md border border-input dark:border-zinc-800 mb-6">
+                <p className="text-sm text-muted-foreground dark:text-gray-300">{operationDetails.description}</p>
+              </div>
+            )}
+            
+            {/* Required notice */}
             <div className="mb-4 flex items-center">
               <span className="text-red-500 font-bold text-lg mr-1">*</span>
               <span className="text-sm text-gray-300">Required fields</span>
             </div>
-          )}
-
-          {loadingOperation ? (
-            <div className="flex justify-center items-center py-8">
-              <div className="animate-spin w-6 h-6 border-4 border-primary border-t-transparent rounded-full"></div>
-              <span className="ml-3">Loading operation details...</span>
-            </div>
-          ) : operationDetails ? (
-            <form onSubmit={handleSubmit} className="pb-20">
-              {/* All fields in one simple list */}
-              <div className="space-y-2">
-                {getAllFields().map(({ key, param }) => renderField(param, key))}
-              </div>
-            </form>
-          ) : (
-            <div className="py-2 text-center text-gray-300">
-              {operations.length > 0 
-                ? 'Select an operation to configure parameters' 
-                : (
-                  <div className="space-y-2">
-                    <p>No operations found for node type: <strong>{rawNodeType}</strong></p>
-                    <p className="text-sm">Check if this node type is correctly configured on the server.</p>
-                    <p className="text-xs text-gray-400">Node type used for API call: {nodeType}</p>
+            
+            {/* Obsolete properties warning */}
+            {obsoleteProps.length > 0 && (
+              <Alert variant="warning" className="mb-6 bg-amber-900/30 border-amber-600 text-amber-200">
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle className="text-amber-200">Obsolete Properties Detected</AlertTitle>
+                <AlertDescription className="text-amber-300/80">
+                  <p className="mb-2">The following properties are not recognized by the current operation and will be removed when saving:</p>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {obsoleteProps.map(prop => (
+                      <Badge key={prop} variant="outline" className="border-amber-500 text-amber-300">{prop}</Badge>
+                    ))}
                   </div>
-                )
-              }
+                </AlertDescription>
+              </Alert>
+            )}
+            
+            {/* Parameters fields */}
+            <div className="space-y-2">
+              {organizedFields.map(({ key, param }) => (
+                <FieldRenderer 
+                  key={key} 
+                  param={param} 
+                  paramKey={key} 
+                  initialValue={formData[key]} 
+                  onChange={handleInputChange} 
+                />
+              ))}
             </div>
-          )}
-        </div>
-      </div>
-      
-      {/* Sticky footer with smaller icons */}
-      <div className="sticky bottom-0 z-10 bg-background dark:bg-[#09090b] border-t border-input dark:border-zinc-800 pt-4 pb-4 px-4">
-        {/* Bottom shadow when scrolled */}
-        <div className={`h-2 bg-gradient-to-t from-gray-900/20 to-transparent absolute top-0 left-0 right-0 transform -translate-y-full z-10 pointer-events-none transition-opacity duration-200 ${scrolledBottom ? 'opacity-0' : 'opacity-100'}`}></div>
-        
-        <div className="flex justify-between items-center">
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={handleExecute}
-                  disabled={executingNode || !operationDetails}
-                  className={`flex items-center justify-center w-9 h-9 rounded-full ${
-                    executingNode 
-                      ? 'bg-gray-700 text-gray-400' 
-                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                  } transition-all duration-200`}
-                  type="button"
-                >
-                  {executingNode ? (
+            
+            {/* Buttons */}
+            <div className="flex justify-between pt-4 border-t mt-8 border-input dark:border-zinc-800">
+              <Button
+                variant="outline"
+                onClick={handleExecute}
+                disabled={executingNode || !operationDetails}
+                className="flex items-center gap-2 px-4 bg-background dark:bg-[#0f0f10] text-foreground dark:text-white 
+                        hover:bg-muted dark:hover:bg-zinc-800 border-input dark:border-zinc-800"
+                type="button"
+              >
+                {executingNode ? (
+                  <>
                     <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full"></div>
-                  ) : (
+                    <span>Executing...</span>
+                  </>
+                ) : (
+                  <>
                     <Play className="h-4 w-4" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{executingNode ? 'Executing...' : 'Execute node'}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={handleSubmit}
-                  disabled={!operationDetails}
-                  className="flex items-center justify-center w-9 h-9 rounded-full bg-green-600 hover:bg-green-700 text-white transition-all duration-200"
-                  type="button"
-                >
-                  <Save className="h-4 w-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Save configuration</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                    <span>Execute</span>
+                  </>
+                )}
+              </Button>
+              
+              <Button
+                type="submit"
+                onClick={handleSubmit}
+                disabled={!operationDetails}
+                className="flex items-center gap-2 px-4 bg-green-600 hover:bg-green-700 text-white"
+              >
+                <Save className="h-4 w-4" />
+                <span>Save</span>
+              </Button>
+            </div>
+            
+            {/* Parameter validation guidance */}
+            {operationDetails.documentation && (
+              <div className="mt-6 pt-4 border-t border-gray-700">
+                <details className="text-sm">
+                  <summary className="cursor-pointer text-blue-400 hover:text-blue-300">Parameter documentation</summary>
+                  <div className="mt-2 p-3 bg-gray-900 rounded text-gray-300">
+                    <div dangerouslySetInnerHTML={{ __html: operationDetails.documentation }} />
+                  </div>
+                </details>
+              </div>
+            )}
+          </form>
+        ) : (
+          <div className="py-4 text-center">
+            {operations.length > 0 
+              ? 'Select an operation to configure parameters' 
+              : `No operations found for node type: ${nodeType}`
+            }
+          </div>
+        )}
+        
+        {/* Show current node data in debug mode */}
+        <div className="mt-6 pt-2 border-t border-gray-700 text-xs">
+          <details>
+            <summary className="cursor-pointer text-gray-500 hover:text-gray-400">Debug: Current Node Data</summary>
+            <div className="mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-40">
+              <pre className="text-gray-400">{JSON.stringify(nodeData, null, 2)}</pre>
+            </div>
+          </details>
+          
+          <details className="mt-2">
+            <summary className="cursor-pointer text-gray-500 hover:text-gray-400">Debug: Current Form Data</summary>
+            <div className="mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-40">
+              <pre className="text-gray-400">{JSON.stringify(formValuesRef.current, null, 2)}</pre>
+            </div>
+          </details>
         </div>
       </div>
-    </div>
-  );
-};
-
-export default DynamicNodeSettings;
+    );
+  };
+  
+  export default DynamicNodeSettings;

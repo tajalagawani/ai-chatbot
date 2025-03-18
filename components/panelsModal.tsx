@@ -50,6 +50,8 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
     const [isFullView, setIsFullView] = useState(true);
     const [activeTab, setActiveTab] = useState('settings');
     const [isDragging, setIsDragging] = useState(false);
+    const [refreshKey, setRefreshKey] = useState(0); // Add a refresh key state to force re-render
+    const [lastExecutionTime, setLastExecutionTime] = useState<number>(0);
 
     // Fixed container width that won't change
     const containerWidth = 2800;
@@ -69,12 +71,48 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
           leftWidth: 1050,
           rightWidth: 1050,
         });
+        
+        // Force components to re-render with updated data when modal opens
+        setRefreshKey(prev => prev + 1);
       }
     }, [isOpen]);
 
+    // Update execution response when nodeData.result changes
+    useEffect(() => {
+      if (nodeData?.result) {
+        console.log("DraggablePanels: nodeData.result updated:", nodeData.result);
+        setExecutionResponse(nodeData.result);
+        // Force components to re-render with updated data
+        setRefreshKey(prev => prev + 1);
+      }
+    }, [nodeData?.result]);
+
+    // Log connected nodes whenever they change
+    useEffect(() => {
+      console.log("DraggablePanels: connectedInputNodes updated:", connectedInputNodes);
+    }, [connectedInputNodes]);
+
     const handleExecutionComplete = useCallback((response: any) => {
-      setExecutionResponse(response);
-    }, []);
+      console.group("DraggablePanels Execution Update");
+      console.log("3. DraggablePanels received execution result:", response);
+      console.log("4. Previous executionResponse:", executionResponse);
+      
+      // Log when execution was received
+      const now = Date.now();
+      setLastExecutionTime(now);
+      
+      // Force a state update for executionResponse
+      setExecutionResponse(null); // Clear first to ensure state change is detected
+      setTimeout(() => {
+        setExecutionResponse(response);
+        console.log("5. Updated executionResponse state");
+        
+        // Ensure refreshKey is updated to force component re-renders
+        setRefreshKey(prev => prev + 1);
+        console.log("6. Updated refreshKey to force re-renders:", refreshKey + 1);
+        console.groupEnd();
+      }, 10);
+    }, [executionResponse, refreshKey]);
 
     const handleMouseDown = useCallback(
       (event: React.MouseEvent) => {
@@ -130,26 +168,117 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
       [customSettings],
     );
 
+    // Process connected nodes to ensure they have result data
+    const processedConnectedNodes = useMemo(() => {
+      console.log("Processing connected nodes with refreshKey:", refreshKey);
+      console.log("Raw connected input nodes in DraggablePanels:", connectedInputNodes);
+      
+      if (!connectedInputNodes || !Array.isArray(connectedInputNodes) || connectedInputNodes.length === 0) {
+        return [];
+      }
+      
+      // Return enhanced nodes with consistent result data structure
+      const enhancedNodes = connectedInputNodes.map(node => {
+        // Make a deep copy of the node to avoid reference issues
+        const enhancedNode = JSON.parse(JSON.stringify(node));
+        
+        // Check if we have a recent execution result that should override
+        if (executionResponse && lastExecutionTime > 0) {
+          console.log("Using latest execution result for node", node.id);
+          // Add the execution result at both top level and in data
+          enhancedNode.result = executionResponse;
+          if (!enhancedNode.data) enhancedNode.data = {};
+          enhancedNode.data.result = executionResponse;
+          enhancedNode.executionResponse = executionResponse;
+          enhancedNode.data.executionResponse = executionResponse;
+          enhancedNode._lastUpdated = lastExecutionTime;
+          return enhancedNode;
+        }
+        
+        // Look for result data in all possible locations
+        let latestResult = null;
+        
+        // Check node.result (top level)
+        if (node.result) {
+          latestResult = node.result;
+        }
+        
+        // Check node.data.result
+        if (node.data?.result) {
+          latestResult = node.data.result;
+        }
+        
+        // Check executionResponse paths
+        if (node.executionResponse?.result?.results?.[node.id]) {
+          latestResult = node.executionResponse.result.results[node.id];
+        }
+        
+        if (node.data?.executionResponse?.result?.results?.[node.id]) {
+          latestResult = node.data.executionResponse.result.results[node.id];
+        }
+        
+        // Add result to both top level and data object to ensure it's accessible
+        if (latestResult) {
+          enhancedNode.result = latestResult;
+          
+          // Make sure data object exists
+          if (!enhancedNode.data) {
+            enhancedNode.data = {};
+          }
+          
+          // Add the result to the data object too
+          enhancedNode.data.result = latestResult;
+        }
+        
+        // Do the same for executionResponse
+        if (node.executionResponse) {
+          enhancedNode.executionResponse = node.executionResponse;
+          if (!enhancedNode.data) enhancedNode.data = {};
+          enhancedNode.data.executionResponse = node.executionResponse;
+        } else if (node.data?.executionResponse) {
+          enhancedNode.executionResponse = node.data.executionResponse;
+          if (!enhancedNode.data) enhancedNode.data = {};
+          enhancedNode.data.executionResponse = node.data.executionResponse;
+        }
+        
+        return enhancedNode;
+      });
+      
+      console.log("Enhanced connected nodes:", enhancedNodes.map(n => ({ 
+        id: n.id, 
+        hasResult: !!n.result,
+        resultSource: n.result ? 'Found' : 'None',
+        lastUpdated: n._lastUpdated
+      })));
+      
+      return enhancedNodes;
+    }, [connectedInputNodes, refreshKey, executionResponse, lastExecutionTime]);
+
+    // In DraggablePanels.tsx, make sure memoizedInputPane is correctly set up
     const memoizedInputPane = useMemo(
       () => (
         <InputPane
-          connectedInputNodes={connectedInputNodes}
+          connectedInputNodes={processedConnectedNodes}
           nodeId={nodeId}
           workflowId={workflowId}
+          key={`input-pane-${refreshKey}-${lastExecutionTime}`}
         />
       ),
-      [nodeId, workflowId, connectedInputNodes],
+      [nodeId, workflowId, processedConnectedNodes, refreshKey, lastExecutionTime],
     );
 
+    // In DraggablePanels.tsx, update the memoizedOutputPane to pass results
     const memoizedOutputPane = useMemo(
       () => (
         <OutputPane
           executionResponse={executionResponse}
+          result={nodeData?.result || executionResponse}
           nodeId={nodeId}
           workflowId={workflowId}
+          key={`output-pane-${refreshKey}-${lastExecutionTime}`}
         />
       ),
-      [nodeId, workflowId, executionResponse],
+      [nodeId, workflowId, executionResponse, nodeData?.result, refreshKey, lastExecutionTime],
     );
 
     const renderDynamicSettings = () => {
@@ -179,9 +308,23 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
       <div className="flex items-center p-2">
         <div className="flex items-center gap-2 z-10">
           <span>{nodeName}</span>
+          {lastExecutionTime > 0 && (
+            <span className="text-xs text-gray-400">
+              (Last execution: {new Date(lastExecutionTime).toLocaleTimeString()})
+            </span>
+          )}
         </div>
       </div>
     );
+
+    // Common sx style to hide scrollbars
+    const hideScrollbarSx = {
+      "&::-webkit-scrollbar": {
+        display: "none"
+      },
+      msOverflowStyle: "none",
+      scrollbarWidth: "none"
+    };
 
     return (
       <Modal
@@ -205,9 +348,9 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
               exit={{ opacity: 0, y: 20 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
               style={{
-                width: "calc(100vw - 50px)", // Changed to 10px margin on each side (20px total)
-                height: "calc(105vh - 20px)", // Changed to 10px margin on top and bottom (20px total)
-                paddingBottom: "20px", // Changed to 10px padding on bottom
+                width: "calc(100vw - 50px)", 
+                height: "calc(105vh - 20px)", 
+                paddingBottom: "20px", 
               }}
               className={isDragging ? 'select-none' : ''}
             >
@@ -220,6 +363,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                     overflow: "hidden",
                     borderRadius: "8px",
                     backdropFilter: "blur(16px)",
+                    ...hideScrollbarSx
                   }}
                 >
                   {renderPanelHeader()}
@@ -231,6 +375,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                       position: "relative",
                       alignItems: "center",
                       justifyContent: "center",
+                      ...hideScrollbarSx
                     }}
                   >
                     <Paper
@@ -244,6 +389,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                         zIndex: 1,
                         marginRight: "-8px",
                         userSelect: isDragging ? 'none' : 'text',
+                        ...hideScrollbarSx
                       }}
                     >
                       {memoizedInputPane}
@@ -252,7 +398,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                       sx={{
                         width: minimumMiddleBoxWidth,
                         height: "100%",
-                        overflow: "auto",
+                        overflow: "hidden", // Changed from "auto" to "hidden" to disable scrolling
                         position: "relative",
                         background: isDarkMode ? '#09090b' : '#ffffff',
                         borderRadius: "8px",
@@ -261,6 +407,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                         boxShadow: isDarkMode ? '0 12px 40px rgba(0, 0, 0, 0.5)' : '0 12px 40px rgba(0, 0, 0, 0.1)',
                         display: "flex",
                         flexDirection: "column",
+                        ...hideScrollbarSx
                       }}
                     >
                       <button
@@ -296,9 +443,14 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                       </div>
                       
                       {/* Render our dynamic settings component */}
-                      <div className="p-4 pt-2 flex-1 overflow-auto">
+                      <Box
+                        className="p-4 pt-2 flex-1 overflow-auto"
+                        sx={{
+                          ...hideScrollbarSx
+                        }}
+                      >
                         {renderDynamicSettings()}
-                      </div>
+                      </Box>
                     </Card>
                     <Paper
                       sx={{
@@ -311,6 +463,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                         zIndex: 1,
                         marginLeft: "-8px",
                         userSelect: isDragging ? 'none' : 'text',
+                        ...hideScrollbarSx
                       }}
                     >
                       {memoizedOutputPane}
@@ -326,6 +479,7 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                     overflow: "hidden",
                     borderRadius: "8px",
                     backdropFilter: "blur(16px)",
+                    ...hideScrollbarSx
                   }}
                 >
                   {renderPanelHeader()}
@@ -334,16 +488,32 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ duration: 0.2 }}
+                    style={{
+                      msOverflowStyle: "none",
+                      scrollbarWidth: "none"
+                    }}
                   >
-                    {activeTab === 'settings' ? (
-                      renderDynamicSettings()
-                    ) : (
-                      <div className="prose dark:prose-invert">
-                        <pre className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg">
-                          {JSON.stringify(nodeData, null, 2)}
-                        </pre>
-                      </div>
-                    )}
+                    <Box
+                      sx={{
+                        ...hideScrollbarSx
+                      }}
+                    >
+                      {activeTab === 'settings' ? (
+                        renderDynamicSettings()
+                      ) : (
+                        <div className="prose dark:prose-invert">
+                          <Box
+                            component="pre"
+                            className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg"
+                            sx={{
+                              ...hideScrollbarSx
+                            }}
+                          >
+                            {JSON.stringify(nodeData, null, 2)}
+                          </Box>
+                        </div>
+                      )}
+                    </Box>
                   </motion.div>
                 </Paper>
               )}

@@ -1,9 +1,26 @@
-// Enhanced BaseNode.tsx
+// Enhanced BaseNode.tsx with Results Modal and Connected Nodes
 import React, { memo, FC, useState, useEffect, useCallback, useMemo } from 'react';
 import { Handle, Position, NodeProps, Node, Edge } from 'reactflow';
 import { useTheme } from 'next-themes';
 import { Card } from '@/components/ui/card';
-import { Box, Loader2, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import { 
+  Box, 
+  Loader2, 
+  AlertCircle, 
+  CheckCircle, 
+  Clock, 
+  FileText, 
+  X 
+} from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogClose
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import DraggablePanels from './panelsModal';
 import './BaseNode.css';
 
@@ -39,10 +56,12 @@ const BaseNode: FC<BaseNodeProps> = memo(({
 }) => {
   // State management
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
   const [logMessage, setLogMessage] = useState('No execution response yet');
   const [nodeStatus, setNodeStatus] = useState('Staging');
   const [iconSrc, setIconSrc] = useState<string | null>(null);
   const [showErrorTooltip, setShowErrorTooltip] = useState(false);
+  const [connectedInputNodes, setConnectedInputNodes] = useState<Node[]>([]);
   const { theme, systemTheme } = useTheme();
 
   // Derived state
@@ -54,6 +73,49 @@ const BaseNode: FC<BaseNodeProps> = memo(({
 
   // Get the node status from data if available
   const executionStatus = data?.status?.status || null;
+  
+  // Extract node results (new)
+  const nodeResult = useMemo(() => {
+    if (!data.result) return null;
+    return data.result;
+  }, [data.result]);
+  
+  // Check if node has results
+  const hasResults = !!nodeResult;
+  
+  // Format node results for display
+  const formattedResults = useMemo(() => {
+    if (!nodeResult) return "No results available";
+    
+    try {
+      if (typeof nodeResult === 'string') {
+        return nodeResult;
+      } else if (typeof nodeResult === 'object') {
+        // Format different result types specially
+        if (nodeResult.result?.choices?.[0]?.message?.content) {
+          // For AI nodes like OpenAI, emphasize the content
+          return {
+            content: nodeResult.result.choices[0].message.content,
+            metadata: JSON.stringify(nodeResult, null, 2)
+          };
+        } else if (nodeResult.body) {
+          // For API requests, highlight the body
+          return {
+            summary: typeof nodeResult.body === 'string' ? nodeResult.body : 
+                     JSON.stringify(nodeResult.body, null, 2),
+            metadata: JSON.stringify(nodeResult, null, 2)
+          };
+        } else {
+          // Default formatting
+          return JSON.stringify(nodeResult, null, 2);
+        }
+      } else {
+        return String(nodeResult);
+      }
+    } catch (e) {
+      return "Error formatting results: " + String(e);
+    }
+  }, [nodeResult]);
   
   // Extract error message from execution response if available
   const errorMessage = useMemo(() => {
@@ -91,14 +153,68 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     return null;
   }, [data.executionResponse, data.id]);
 
-  // Memoized values
-  const connectedInputNodes = useMemo(() => {
+  // Memoized connected nodes with properly formatted data
+  const memoizedConnectedNodes = useMemo(() => {
     if (!allEdges || !allNodes) return [];
-    return allEdges
+    
+    const sourceNodes = allEdges
       .filter(edge => edge.target === id)
-      .map(edge => allNodes.find(node => node.id === edge.source))
+      .map(edge => {
+        const sourceNode = allNodes.find(node => node.id === edge.source);
+        if (sourceNode) {
+          // Create enhanced node with both node structure and result data
+          const enhancedNode = {
+            ...sourceNode,
+            // Add result at top level for components that expect it there
+            result: sourceNode.data?.result || null,
+            // Add executionResponse at top level 
+            executionResponse: sourceNode.data?.executionResponse || null,
+            // Also update the data object to include these properties
+            data: {
+              ...sourceNode.data,
+              // Include result in data object
+              result: sourceNode.data?.result || null,
+              // Include executionResponse in data object
+              executionResponse: sourceNode.data?.executionResponse || null
+            }
+          };
+          
+          console.log(`Source node ${sourceNode.id} data:`, {
+            hasTopLevelResult: !!enhancedNode.result,
+            hasDataResult: !!enhancedNode.data.result,
+            resultType: enhancedNode.result ? typeof enhancedNode.result : 'none',
+            resultPreview: enhancedNode.result ? 
+              (typeof enhancedNode.result === 'object' ? 
+               JSON.stringify(enhancedNode.result).substring(0, 100) + '...' : 
+               String(enhancedNode.result).substring(0, 100) + '...') : 
+              'none'
+          });
+          
+          return enhancedNode;
+        }
+        return undefined;
+      })
       .filter((node): node is Node => node !== undefined);
+    
+    console.log('Memoized connected input nodes for', id, ':', sourceNodes.map(node => ({
+      id: node.id,
+      hasResult: !!node.result,
+      hasExecutionResponse: !!node.executionResponse, 
+      hasDataResult: !!node.data.result,
+      hasDataExecutionResponse: !!node.data.executionResponse
+    })));
+    
+    return sourceNodes;
   }, [id, allNodes, allEdges]);
+
+  // Update connected nodes state whenever the memoized value changes
+  useEffect(() => {
+    if (memoizedConnectedNodes.length > 0) {
+      console.log(`Setting connected input nodes for ${id}:`, 
+        memoizedConnectedNodes.map(node => node.id));
+      setConnectedInputNodes(memoizedConnectedNodes);
+    }
+  }, [memoizedConnectedNodes, id]);
 
   const logoDotStyle = useMemo(() => {
     if (!data.executionResponse) return {};
@@ -108,6 +224,14 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     return {};
   }, [data.executionResponse]);
 
+  // Handler for showing results modal
+  const handleResultsIconClick = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (hasResults || executionStatus === 'failed' || executionStatus === 'completed') {
+      setIsResultsModalOpen(true);
+    }
+  }, [hasResults, executionStatus]);
+
   // Get status icon based on execution status
   const getStatusIcon = useCallback(() => {
     if (!executionStatus) return null;
@@ -115,15 +239,20 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     switch (executionStatus) {
       case 'completed':
         return (
-          <div className="status-icon">
+          <div 
+            className="status-icon clickable-icon"
+            onClick={handleResultsIconClick}
+            title="View node results"
+          >
             <CheckCircle className="h-4 w-4 status-icon-completed" />
           </div>
         );
       case 'failed':
         return (
           <div 
-            className="status-icon error-status-icon"
-            title={errorMessage || "Execution failed"}
+            className="status-icon error-status-icon clickable-icon"
+            onClick={handleResultsIconClick}
+            title={errorMessage || "View error details"}
           >
             <AlertCircle className="h-4 w-4 status-icon-failed" />
           </div>
@@ -143,7 +272,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
       default:
         return null;
     }
-  }, [executionStatus, errorMessage]);
+  }, [executionStatus, errorMessage, handleResultsIconClick]);
 
   // Node style calculations
   const getNodeBorderStyle = useCallback((
@@ -230,6 +359,56 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     opacity: 5,
   }), [handleStyle]);
 
+  // Function to find connected input nodes using global flow data
+  // This is a fallback method if the memoized nodes aren't available
+  const findConnectedInputNodes = useCallback(() => {
+    // First try to use the memoized nodes (preferred method)
+    if (memoizedConnectedNodes.length > 0) {
+      console.log("Using memoized connected nodes:", memoizedConnectedNodes);
+      return memoizedConnectedNodes;
+    }
+    
+    // If no memoized nodes, try using global flow data
+    const flowNodes = window._flowNodes || [];
+    const flowEdges = window._flowEdges || [];
+    
+    console.log("Falling back to global flow data:", 
+      flowNodes.length, "nodes and", flowEdges.length, "edges");
+    
+    // Find all edges where this node is the target
+    const incomingEdges = flowEdges.filter(edge => edge.target === id);
+    console.log("Incoming edges for node", id, ":", incomingEdges);
+    
+    // Get source nodes for these edges
+    const sourceNodes = incomingEdges
+      .map(edge => {
+        const sourceNode = flowNodes.find(node => node.id === edge.source);
+        if (sourceNode) {
+          // Create enhanced node with both node structure and result data
+          return {
+            ...sourceNode,
+            // Add result at top level for components that expect it there
+            result: sourceNode.result || sourceNode.data?.result || null,
+            // Add executionResponse at top level 
+            executionResponse: sourceNode.executionResponse || sourceNode.data?.executionResponse || null,
+            // Also update the data object to include these properties
+            data: {
+              ...sourceNode.data,
+              // Include result in data object
+              result: sourceNode.data?.result || sourceNode.result || null,
+              // Include executionResponse in data object
+              executionResponse: sourceNode.data?.executionResponse || sourceNode.executionResponse || null
+            }
+          };
+        }
+        return undefined;
+      })
+      .filter(Boolean);
+    
+    console.log('Connected input nodes from global data for', id, ':', sourceNodes);
+    return sourceNodes;
+  }, [id, memoizedConnectedNodes]);
+
   // Effects
   useEffect(() => {
     if (data.executionResponse) {
@@ -256,7 +435,32 @@ const BaseNode: FC<BaseNodeProps> = memo(({
       return;
     }
     
-    // Second priority: Show execution response details if available
+    // Second priority: Check for node result data
+    if (nodeResult) {
+      let resultSummary = '';
+      
+      if (typeof nodeResult === 'string') {
+        resultSummary = nodeResult.substring(0, 150) + (nodeResult.length > 150 ? '...' : '');
+      } else if (typeof nodeResult === 'object') {
+        if (nodeResult.result?.choices?.[0]?.message?.content) {
+          // For AI nodes like OpenAI, show the generated content
+          resultSummary = nodeResult.result.choices[0].message.content;
+        } else if (nodeResult.body) {
+          // For API requests, show a summary of the response
+          resultSummary = `Response: ${JSON.stringify(nodeResult.body).substring(0, 150)}...`;
+        } else {
+          // Fallback: stringify the full result
+          resultSummary = JSON.stringify(nodeResult).substring(0, 150) + '...';
+        }
+      } else {
+        resultSummary = String(nodeResult).substring(0, 150) + '...';
+      }
+      
+      setLogMessage(resultSummary);
+      return;
+    }
+    
+    // Third priority: Show execution response details if available
     if (data.executionResponse) {
       let detailedMessage = '';
       
@@ -273,7 +477,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
             // For AI nodes like OpenAI, show the generated content
             detailedMessage = nodeResult.result.choices[0].message.content;
           } else if (nodeResult?.body) {
-            // For API request nodes, show a summary of the response
+            // For API requests, show a summary of the response
             detailedMessage = `Response: ${JSON.stringify(nodeResult.body).substring(0, 150)}...`;
           } else if (nodeResult?.status) {
             // For other nodes with status info
@@ -292,7 +496,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
       return;
     }
     
-    // Third priority: Show status message if available
+    // Fourth priority: Show status message if available
     if (data?.status?.message) {
       setLogMessage(data.status.message);
       return;
@@ -300,7 +504,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     
     // Default message if nothing else is available
     setLogMessage('No execution response yet');
-  }, [data.executionResponse, data?.status, data.id, errorMessage]);
+  }, [data.executionResponse, data?.status, data.id, errorMessage, nodeResult]);
 
   // Log all node data when double-clicked
   const logNodeData = useCallback(() => {
@@ -325,7 +529,8 @@ const BaseNode: FC<BaseNodeProps> = memo(({
         status: executionStatus,
         hasError: !!errorMessage,
         errorMessage,
-        executionResponse: data.executionResponse
+        executionResponse: data.executionResponse,
+        result: nodeResult
       }
     };
 
@@ -350,6 +555,9 @@ const BaseNode: FC<BaseNodeProps> = memo(({
       inputNodes: connectedInputNodes,
       outputTo: allEdges?.filter(edge => edge.source === id).map(edge => edge.target) || []
     });
+    if (nodeResult) {
+      console.log('✅ Execution Result:', nodeResult);
+    }
     if (data.executionResponse) {
       console.log('🚀 Execution Response:', data.executionResponse);
     }
@@ -374,7 +582,8 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     nodeStatus, 
     errorMessage, 
     connectedInputNodes, 
-    allEdges
+    allEdges,
+    nodeResult
   ]);
 
   // Event handlers
@@ -385,9 +594,20 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     const nodeData = logNodeData();
     console.log('Complete node data on double-click:', nodeData);
     
+    // Update connected nodes before opening the modal
+    // First check if we already have connected nodes
+    if (connectedInputNodes.length === 0) {
+      // If not, find them now
+      const inputNodes = findConnectedInputNodes();
+      setConnectedInputNodes(inputNodes);
+      console.log('Input nodes set before opening modal:', inputNodes);
+    } else {
+      console.log('Using existing connected nodes:', connectedInputNodes);
+    }
+    
     // Open node settings modal
     setIsModalOpen(true);
-  }, [logNodeData]);
+  }, [logNodeData, findConnectedInputNodes, connectedInputNodes]);
 
   const handleModalClose = useCallback(() => {
     setIsModalOpen(false);
@@ -426,6 +646,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     // Apply the changes - completely replacing old data
     onNodeDataChange(id, newNodeData);
   }, [id, data, onNodeDataChange]);
+
   // Get the background color based on execution status
   const getNodeBackgroundClass = () => {
     if (!executionStatus) return '';
@@ -500,6 +721,64 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     return handles[nodeKind] || handles.Default;
   }, [nodeKind, handleStyle, handleOutStyle]);
 
+  // Render the results modal content
+  const renderResultsModalContent = () => {
+    // First show errors if they exist
+    if (errorMessage) {
+      return (
+        <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-4">
+          <h3 className="text-sm font-medium text-red-700 mb-2">Error</h3>
+          <div className="whitespace-pre-wrap text-sm text-red-800">{errorMessage}</div>
+        </div>
+      );
+    }
+    
+    // If no results available, show a message
+    if (!nodeResult) {
+      return (
+        <div className="bg-slate-50 p-4 rounded-md text-sm text-slate-600">
+          No detailed results available for this node.
+        </div>
+      );
+    }
+
+    // Otherwise format the results
+    if (typeof formattedResults === 'string') {
+      return (
+        <pre className="bg-slate-50 p-4 rounded-md overflow-auto max-h-96 text-sm">
+          {formattedResults}
+        </pre>
+      );
+    } else if (typeof formattedResults === 'object') {
+      return (
+        <div className="space-y-4">
+          {formattedResults.content && (
+            <div className="bg-white border border-green-200 rounded-md p-4">
+              <h3 className="text-sm font-medium text-green-700 mb-2">Content</h3>
+              <div className="whitespace-pre-wrap text-sm">{formattedResults.content}</div>
+            </div>
+          )}
+          
+          {formattedResults.summary && (
+            <div className="bg-white border border-blue-200 rounded-md p-4">
+              <h3 className="text-sm font-medium text-blue-700 mb-2">Summary</h3>
+              <div className="whitespace-pre-wrap text-sm">{formattedResults.summary}</div>
+            </div>
+          )}
+          
+          {formattedResults.metadata && (
+            <div className="bg-slate-50 border border-slate-200 rounded-md p-4">
+              <h3 className="text-sm font-medium text-slate-700 mb-2">Full Response</h3>
+              <pre className="overflow-auto max-h-60 text-xs">{formattedResults.metadata}</pre>
+            </div>
+          )}
+        </div>
+      );
+    }
+    
+    return <div>No results available</div>;
+  };
+
   return (
     <>
       <div className="relative" onDoubleClick={handleDoubleClick}>
@@ -528,11 +807,22 @@ const BaseNode: FC<BaseNodeProps> = memo(({
                   <Loader2 className="h-8 w-8 text-amber-500 animate-spin absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
                 </div>
               )}
+              
+              {/* Add results icon if results are available */}
+              {hasResults && (
+                <div 
+                  className="results-icon"
+                  onClick={handleResultsIconClick}
+                  title="View node results"
+                >
+                  <FileText className="h-5 w-5 text-blue-500 hover:text-blue-700 transition-colors cursor-pointer" />
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Show log bar for all nodes with execution responses, not just selected ones */}
-          {(data.executionResponse || data?.status) && (
+{/* Show log bar for all nodes with execution responses, not just selected ones */}
+{(data.executionResponse || data?.status || nodeResult) && (
             <div className="log-bar">
               <span className="green-dot" style={logoDotStyle}></span>
               <div className="marquee-container">
@@ -550,15 +840,19 @@ const BaseNode: FC<BaseNodeProps> = memo(({
           {data?.type || nodeType || id}
         </div>
         
-        {/* Add execution status badge if available */}
+        {/* Add clickable execution status badge */}
         {executionStatus && (
-          <div className={`node-status-badge node-status-${executionStatus}`}>
+          <div 
+            className={`node-status-badge node-status-${executionStatus} clickable-badge`}
+            onClick={handleResultsIconClick}
+            title="Click to view node details"
+          >
             {executionStatus}
           </div>
         )}
       </div>
 
-      {/* Use DraggablePanels instead of NodeSettingsSheet */}
+      {/* Use DraggablePanels for node settings */}
       <DraggablePanels
         isOpen={isModalOpen}
         onClose={handleModalClose}
@@ -568,9 +862,88 @@ const BaseNode: FC<BaseNodeProps> = memo(({
         nodeId={id}
         nodeName={data?.type || nodeType || id}
         nodeDescription={data?.description || ''}
-        nodeData={data}
-        connectedInputNodes={connectedInputNodes}
+        nodeData={{
+          ...data,
+          result: nodeResult // Ensure result is passed
+        }}
+        connectedInputNodes={connectedInputNodes} // Pass connected nodes to DraggablePanels
       />
+      
+      {/* Results Modal */}
+      <Dialog open={isResultsModalOpen} onOpenChange={setIsResultsModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-blue-500" />
+              {data?.type || nodeType || id} Results
+            </DialogTitle>
+            <DialogDescription>
+              Execution results for node ID: {id}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="mt-4">
+            {renderResultsModalContent()}
+          </div>
+          
+          <div className="mt-6 flex justify-end">
+            <DialogClose asChild>
+              <Button className="bg-slate-100 text-slate-900 hover:bg-slate-200">
+                Close
+              </Button>
+            </DialogClose>
+          </div>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Add styles for clickable elements */}
+      <style jsx global>{`
+        .results-icon {
+          position: absolute;
+          bottom: -6px;
+          right: -6px;
+          background-color: white;
+          border-radius: 50%;
+          width: 24px;
+          height: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid #e2e8f0;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          z-index: 5;
+          cursor: pointer;
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .results-icon:hover {
+          transform: scale(1.1);
+          box-shadow: 0 3px 6px rgba(0,0,0,0.15);
+        }
+        
+        .dark .results-icon {
+          background-color: #1f2937;
+          border-color: #374151;
+        }
+        
+        .clickable-badge {
+          cursor: pointer;
+          transition: transform 0.2s;
+        }
+        
+       .clickable-badge:hover {
+          transform: translateX(-50%) scale(1.05);
+        }
+        
+        .clickable-icon {
+          cursor: pointer;
+          transition: transform 0.2s;
+        }
+        
+        .clickable-icon:hover {
+          transform: scale(1.1);
+        }
+      `}</style>
     </>
   );
 });

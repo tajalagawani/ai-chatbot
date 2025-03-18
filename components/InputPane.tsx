@@ -1,6 +1,6 @@
 "use client";
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import JsonOut from './JsonOut';
+
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -9,14 +9,44 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Icon } from "@iconify/react";
-import { Loader2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, Copy, Check, AlertCircle, CheckCircle, Clock, ArrowDown } from "lucide-react";
 import { useTheme } from 'next-themes';
+
+// Simple JSON viewer component
+const JsonOut = ({ code, editable = false, onChange = () => {} }) => {
+  const [copied, setCopied] = useState(false);
+  const { theme, systemTheme } = useTheme();
+  const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  return (
+    <div className="relative h-full">
+      <pre className={`p-4 rounded-md overflow-auto h-full ${isDarkMode ? 'bg-[#1a1a1a] text-gray-300' : 'bg-gray-50 text-gray-700'}`}>
+        <code>{code}</code>
+      </pre>
+      <Button 
+        variant="ghost" 
+        size="sm" 
+        className="absolute top-2 right-2" 
+        onClick={copyToClipboard}
+      >
+        {copied ? <Check size={16} /> : <Copy size={16} />}
+      </Button>
+    </div>
+  );
+};
 
 interface InputPaneProps {
   nodeId: string;
   workflowId: string;
+  connectedInputNodes: any[];
 }
 
 interface DraggableItem {
@@ -34,42 +64,57 @@ interface SchemaViewProps {
   sourceNodeId: string;
 }
 
-const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: SchemaViewProps) => {
-  const getChipColor = useCallback((type: any) => {
-    switch (type) {
-      case 'object': return 'primary';
-      case 'array': return 'secondary';
-      case 'string': return 'success';
-      case 'number': return 'warning';
-      case 'boolean': return 'danger';
-      default: return 'default';
-    }
-  }, []);
+// Function to get status icon based on execution status
+const getStatusIcon = (status) => {
+  switch (status) {
+    case 'completed':
+      return <CheckCircle className="h-4 w-4 text-green-500" />;
+    case 'failed':
+      return <AlertCircle className="h-4 w-4 text-red-500" />;
+    case 'pending':
+      return <Clock className="h-4 w-4 text-blue-500" />;
+    case 'in_progress':
+      return <Loader2 className="h-4 w-4 text-amber-500 animate-spin" />;
+    default:
+      return null;
+  }
+};
+
+const getStatusLabel = (status) => {
+  if (!status) return null;
   
-  const EmptyState = () => (
-    <div className="flex flex-col items-center justify-center h-full gap-4">
-      <svg
-        viewBox="0 0 24 24"
-        className="w-16 h-16 text-gray-400"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M7 5h10" />
-        <path d="M7 5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2" />
-        <path d="M22 10a2 2 0 0 0-2-2h-3" />
-        <path d="M20 8v8" />
-        <path d="M16 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2" />
-      </svg>
-      <p className="text-xl text-gray-500 font-medium">Wire Me</p>
-    </div>
+  let color = 'bg-gray-100 text-gray-800';
+  
+  switch (status) {
+    case 'completed':
+      color = 'bg-green-100 text-green-800';
+      break;
+    case 'failed':
+      color = 'bg-red-100 text-red-800';
+      break;
+    case 'pending':
+      color = 'bg-blue-100 text-blue-800';
+      break;
+    case 'in_progress':
+      color = 'bg-amber-100 text-amber-800';
+      break;
+  }
+  
+  return (
+    <span className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs ${color}`}>
+      {getStatusIcon(status)}
+      <span className="capitalize">{status}</span>
+    </span>
   );
-  
-  const renderTree = useCallback((key: string | undefined, value: { type: string; properties: { [s: string]: unknown; } | ArrayLike<unknown>; items: any; }, dataValue: any[], path = '') => {
+};
+
+const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: SchemaViewProps) => {
+  const { theme, systemTheme } = useTheme();
+  const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
+
+  const renderTree = useCallback((key: string | undefined, value: any, dataValue: any, path = '') => {
     const fullPath = path ? `${path}.${key}` : key;
-    console.log('checking Node TREE', sourceNodeId);
+    
     const item = { 
       id: fullPath, 
       name: key, 
@@ -99,11 +144,11 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
           <Badge variant={getBadgeVariant(value.type)} className="mr-2">
             {`${key}: ${value.type}`}
           </Badge>
-          <Icon icon="mdi:drag" />
+          <span className="text-lg text-muted-foreground">⋮⋮</span>
         </div>
         {value.type !== 'object' && value.type !== 'array' && (
           <span className="text-sm text-gray-500 truncate max-w-[50%]">
-            {JSON.stringify(dataValue)}
+            {typeof dataValue === 'object' ? JSON.stringify(dataValue) : String(dataValue)}
           </span>
         )}
       </div>
@@ -138,7 +183,23 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
               </AccordionTrigger>
               <AccordionContent>
                 <div className="ml-4">
-                  {renderTree('items', value.items, dataValue?.[0], fullPath)}
+                  {Array.isArray(dataValue) && dataValue.length > 0 ? (
+                    <div>
+                      {dataValue.slice(0, 3).map((item, index) => (
+                        <div key={index} className="mb-2 px-2 py-1 border-l-2 border-gray-300">
+                          <div className="text-xs font-medium">[{index}]</div>
+                          {renderTree('item', value.items, item, `${fullPath}[${index}]`)}
+                        </div>
+                      ))}
+                      {dataValue.length > 3 && (
+                        <div className="text-xs text-gray-500 italic">
+                          ...and {dataValue.length - 3} more items
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-xs italic text-gray-500">Empty array</div>
+                  )}
                 </div>
               </AccordionContent>
             </AccordionItem>
@@ -148,14 +209,34 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
     } else {
       return (
         <div key={fullPath} className="mb-2">
-          {titleContent}
+          <Accordion type="single" collapsible defaultValue={fullPath}>
+            <AccordionItem value={fullPath}>
+              <AccordionTrigger className="px-2 hover:no-underline">
+                {titleContent}
+              </AccordionTrigger>
+              <AccordionContent>
+                <pre className={`text-xs mt-2 whitespace-pre-wrap break-words p-2 rounded ${isDarkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'}`}>
+                  {typeof dataValue === 'object' ? JSON.stringify(dataValue, null, 2) : String(dataValue)}
+                </pre>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
         </div>
       );
     }
-  }, [getChipColor, onDragStart, sourceNodeId]);
+  }, [onDragStart, sourceNodeId, isDarkMode]);
+
+  // Handle case where schema or data might be missing
+  if (!schema || !schema.properties || Object.keys(schema.properties).length === 0) {
+    return (
+      <div className="p-4 text-center">
+        <p className="text-muted-foreground">No schema data available</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="font-mono text-sm">
+    <div className="font-mono text-sm overflow-y-auto h-full">
       {Object.entries(schema.properties).map(([key, value]) => 
         renderTree(key, value, data[key])
       )}
@@ -174,34 +255,60 @@ const columns = [
 const EmptyState = () => (
   <div className="flex flex-col items-center justify-center h-full gap-4">
     <div className="flex flex-col items-center gap-6 p-8 rounded-md border border-gray-700 bg-[#09090b]">
-      <img 
-        src="https://cdn4.iconfinder.com/data/icons/plug-electric-cs/512/energy_adapter_element_cable-06-512.png"
-        alt="Wire icon"
-        className="w-24 h-24 opacity-50 [filter:invert(40%)_sepia(0%)_saturate(100%)_hue-rotate(190deg)_brightness(90%)_contrast(95%)]"
-      />
-      <p className="text-base text-gray-500 opacity-30">Wire Me Left</p>  
+      <ArrowDown size={64} className="text-gray-500 opacity-40" />
+      <p className="text-base text-gray-500 opacity-30">No Input Connections</p>  
     </div>
     <p className="text-sm text-gray-500 opacity-40 max-w-md text-center">
-      Connect a node to access its output data and enable data flow between nodes
+      This node doesn't have any input connections yet
     </p>
   </div>
 );
 
-const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
+const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInputNodes }) => {
   const { theme, systemTheme } = useTheme();
   const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
-  const [inputData, setInputData] = useState<any>({ loading: true });
   const [activeTab, setActiveTab] = useState("schema");
+  const [selectedNodeIndex, setSelectedNodeIndex] = useState(0);
   const [draggableItems, setDraggableItems] = useState<DraggableItem[]>([]);
-  const [isExpanded, setIsExpanded] = useState(false);
   const [page, setPage] = useState(1);
-  const rowsPerPage = 11;
-  const [sourceNodeId, setSourceNodeId] = useState<string | null>(null);
+  const rowsPerPage = 10;
+  const [nodeStatus, setNodeStatus] = useState<string | null>(null);
+  const [instanceId, setInstanceId] = useState(Date.now()); // Used to force re-render
 
+  // Ensure we have a valid selectedNodeIndex when connectedInputNodes changes
+  useEffect(() => {
+    if (connectedInputNodes && connectedInputNodes.length > 0) {
+      if (selectedNodeIndex >= connectedInputNodes.length) {
+        setSelectedNodeIndex(0);
+      }
+      
+      // Force re-render when connected nodes change or when their execution data changes
+      setInstanceId(Date.now());
+    }
+  }, [
+    connectedInputNodes, 
+    selectedNodeIndex,
+    // Add these dependencies to detect changes in execution results
+    connectedInputNodes?.map(node => node.result?.status?.status || 
+      node.data?.result?.status?.status || 
+      node.executionResponse?.result?.results?.[node.id]?.status?.status).join('|'),
+    connectedInputNodes?.map(node => 
+      JSON.stringify(node.executionResponse?.result?.results?.[node.id] || 
+      node.result || 
+      node.data?.result))
+  ]);
+
+  // Generate draggable items from the current selected node
   const generateDraggableItems = useCallback((data: any, sourceNodeId: string, prefix = ''): DraggableItem[] => {
     let items: DraggableItem[] = [];
-    if (typeof data === 'object' && data !== null) {
+    
+    if (!data || typeof data !== 'object') return items;
+    
+    try {
       Object.entries(data).forEach(([key, value]) => {
+        // Skip internal/metadata properties
+        if (key.startsWith('_')) return;
+        
         const fullKey = prefix ? `${prefix}.${key}` : key;
         items.push({
           id: fullKey,
@@ -210,80 +317,150 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
           type: Array.isArray(value) ? 'array' : typeof value,
           nodeId: sourceNodeId
         });
+        
         if (typeof value === 'object' && value !== null) {
           items = items.concat(generateDraggableItems(value, sourceNodeId, fullKey));
         }
       });
+    } catch (e) {
+      console.error('Error generating draggable items:', e);
     }
+    
     return items;
   }, []);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const workflow = await getWorkflow(workflowId);
-        const currentNode = workflow.nodes.find((node) => node.id === nodeId);
-        if (currentNode) {
-          // Find the first incoming edge
-          const incomingEdge = workflow.edges.find((edge) => edge.target === nodeId);
-          
-          if (incomingEdge) {
-            const sourceNode = workflow.nodes.find((node) => node.id === incomingEdge.source);
-            
-            if (sourceNode && sourceNode.data && sourceNode.data.executionResponse) {
-              setInputData(sourceNode.data.executionResponse);
-              setSourceNodeId(sourceNode.id);
-              const items = generateDraggableItems(sourceNode.data.executionResponse, sourceNode.id);
-              setDraggableItems(items);
-            } else {
-              setInputData({ error: "No input data available" });
-            }
-          } else {
-            setInputData({ info: "This node has no input data" });
-          }
-        } else {
-          setInputData({ error: "Current node not found" });
-        }
-      } catch (error) {
-        console.error('InputPane: Error fetching input data:', error);
-        setInputData({ error: error.message });
-      }
-    };
-
-    fetchData();
-  }, [nodeId, workflowId, generateDraggableItems]);
-
+  // Generate schema from data
   const generateSchemaFromData = useCallback((data: any): any => {
-    if (Array.isArray(data)) {
-      return {
-        type: 'array',
-        items: generateSchemaFromData(data[0])
-      };
-    } else if (typeof data === 'object' && data !== null) {
-      const properties: any = {};
-      Object.entries(data).forEach(([key, value]) => {
-        properties[key] = generateSchemaFromData(value);
-      });
-      return {
-        type: 'object',
-        properties: properties
-      };
-    } else {
-      return {
-        type: typeof data
-      };
+    if (!data || typeof data !== 'object') {
+      return { type: 'unknown', properties: {} };
+    }
+    
+    try {
+      if (Array.isArray(data)) {
+        if (data.length === 0) {
+          return { type: 'array', items: { type: 'unknown' } };
+        }
+        return {
+          type: 'array',
+          items: generateSchemaFromData(data[0])
+        };
+      } else if (typeof data === 'object' && data !== null) {
+        const properties: any = {};
+        Object.entries(data).forEach(([key, value]) => {
+          // Skip internal/metadata properties
+          if (!key.startsWith('_')) {
+            properties[key] = generateSchemaFromData(value);
+          }
+        });
+        return {
+          type: 'object',
+          properties: properties
+        };
+      } else {
+        return {
+          type: typeof data
+        };
+      }
+    } catch (e) {
+      console.error('Error generating schema:', e);
+      return { type: 'unknown', properties: {} };
     }
   }, []);
 
-  const inputSchema = useMemo(() => generateSchemaFromData(inputData), [inputData, generateSchemaFromData]);
+  // Get the currently selected node data
+  const selectedNode = useMemo(() => {
+    if (!connectedInputNodes || connectedInputNodes.length === 0) {
+      return null;
+    }
+    
+    return connectedInputNodes[selectedNodeIndex];
+  }, [connectedInputNodes, selectedNodeIndex, instanceId]);
+
+  // Extract the result data from the selected node
+  const nodeData = useMemo(() => {
+    if (!selectedNode) {
+      return null;
+    }
+    
+    console.log('Processing selected node for input pane:', selectedNode);
+    
+    // Find the result in the node, looking in all possible locations
+    let result = null;
+    
+    // Check node.result (top level)
+    if (selectedNode.result) {
+      result = selectedNode.result;
+    }
+    
+    // Check node.data.result
+    else if (selectedNode.data?.result) {
+      result = selectedNode.data.result;
+    }
+    
+    // Check executionResponse paths
+    else if (selectedNode.executionResponse?.result?.results?.[selectedNode.id]) {
+      result = selectedNode.executionResponse.result.results[selectedNode.id];
+    }
+    
+    else if (selectedNode.data?.executionResponse?.result?.results?.[selectedNode.id]) {
+      result = selectedNode.data.executionResponse.result.results[selectedNode.id];
+    }
+    
+    console.log('Extracted result from selected node:', result);
+    
+    // Extract status if available
+    if (result?.status) {
+      setNodeStatus(result.status.status || (typeof result.status === 'string' ? result.status : null));
+    } else {
+      setNodeStatus(null);
+    }
+    
+    // Generate draggable items based on the result
+    if (result) {
+      const items = generateDraggableItems(result, selectedNode.id);
+      setDraggableItems(items);
+    } else {
+      setDraggableItems([]);
+    }
+    
+    return result;
+  }, [selectedNode, generateDraggableItems, instanceId]);
+
+  // Generate schema from the current node data
+  const nodeSchema = useMemo(() => {
+    return generateSchemaFromData(nodeData);
+  }, [nodeData, generateSchemaFromData]);
 
   const handleDragStart = useCallback((event: React.DragEvent<HTMLElement>, item: DraggableItem) => {
     event.stopPropagation();
-    console.log('Drag start:', item);
+    console.log('Drag start from InputPane:', item);
     event.dataTransfer.setData('text/plain', JSON.stringify(item));
   }, []);
 
-  const renderCell = useCallback((item: { [x: string]: any; id: string | number | bigint | boolean | React.ReactElement<any, string | React.JSXElementConstructor<any>> | Iterable<React.ReactNode> | Promise<React.AwaitedReactNode> | null | undefined; }, columnKey: React.Key) => {
+  const formatValue = useCallback((value: any): string => {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    
+    if (typeof value === 'object') {
+      try {
+        if (Object.keys(value).length > 3) {
+          return JSON.stringify({
+            ...Object.fromEntries(
+              Object.entries(value).slice(0, 3)
+            ),
+            '...': '...'
+          });
+        }
+        return JSON.stringify(value);
+      } catch (e) {
+        return '[Complex Object]';
+      }
+    }
+    
+    return String(value);
+  }, []);
+
+  const renderCell = useCallback((item: DraggableItem, columnKey: React.Key) => {
     const cellValue = item[columnKey as keyof DraggableItem];
     switch (columnKey) {
       case "name":
@@ -295,9 +472,9 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
         );
       case "value":
         return (
-          <div className="flex flex-col">
-            <p className="text-sm font-medium">
-              {typeof cellValue === 'object' ? JSON.stringify(cellValue) : String(cellValue)}
+          <div className="max-w-[300px] overflow-hidden">
+            <p className="text-sm break-all truncate">
+              {formatValue(cellValue)}
             </p>
           </div>
         );
@@ -319,8 +496,12 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="text-lg text-muted-foreground cursor-move">
-                    <Icon icon="mdi:drag" />
+                  <span 
+                    className="text-lg text-muted-foreground cursor-move px-2"
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, item)}
+                  >
+                    ⋮⋮
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -333,7 +514,7 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
       default:
         return cellValue;
     }
-  }, []);
+  }, [formatValue, handleDragStart]);
 
   const pages = Math.ceil(draggableItems.length / rowsPerPage);
 
@@ -347,83 +528,111 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
     <>
       {activeTab === "schema" && (
         <SchemaView 
-          schema={inputSchema} 
-          data={inputData} 
+          schema={nodeSchema} 
+          data={nodeData} 
           onDragStart={handleDragStart}
-          sourceNodeId={sourceNodeId}
+          sourceNodeId={selectedNode?.id || nodeId}
         />
       )}
       {activeTab === "json" && (
         <JsonOut 
-          code={JSON.stringify(inputData, null, 2)} 
+          code={JSON.stringify(nodeData, null, 2)} 
           editable={false} 
-          onChange={() => {}}
         />
       )}
       {activeTab === "table" && (
-        <>
-          <Table>
-            <TableHeader>
-              {columns.map((column) => (
-                <TableHead key={column.uid} className={column.uid === "actions" ? "text-center" : "text-left"}>
-                  {column.name}
-                </TableHead>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {items.map((item) => (
-                <TableRow key={item.id} draggable onDragStart={(event) => handleDragStart(event, item)}>
-                  {columns.map((column) => (
-                    <TableCell key={column.uid}>{renderCell(item, column.uid)}</TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          <div className="flex w-full justify-center py-4 pt-12">
-            <Pagination>
-              <PaginationContent>
-                <PaginationPrevious 
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                />
-                {Array.from({ length: Math.min(5, pages) }).map((_, i) => {
-                  const pageNum = i + 1;
-                  return (
-                    <PaginationItem key={pageNum}>
-                      <PaginationLink
-                        isActive={pageNum === page}
-                        onClick={() => setPage(pageNum)}
-                      >
-                        {pageNum}
-                      </PaginationLink>
-                    </PaginationItem>
-                  );
-                })}
-                <PaginationNext 
-                  onClick={() => setPage(p => Math.min(pages, p + 1))}
-                  disabled={page === pages}
-                />
-              </PaginationContent>
-            </Pagination>
+        <div className="flex flex-col h-full">
+          <div className="overflow-y-auto flex-1">
+            <Table>
+              <TableHeader>
+                {columns.map((column) => (
+                  <TableHead key={column.uid} className={column.uid === "actions" ? "text-center" : "text-left"}>
+                    {column.name}
+                  </TableHead>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => (
+                  <TableRow key={item.id} draggable onDragStart={(event) => handleDragStart(event, item)}>
+                    {columns.map((column) => (
+                      <TableCell key={column.uid}>{renderCell(item, column.uid)}</TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
-        </>
+          
+          {pages > 1 && (
+            <div className="flex w-full justify-center py-4 border-t">
+              <Pagination>
+                <PaginationContent>
+                  <PaginationPrevious 
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                  />
+                  {Array.from({ length: Math.min(5, pages) }).map((_, i) => {
+                    const pageNum = i + 1;
+                    return (
+                      <PaginationItem key={pageNum}>
+                        <PaginationLink
+                          isActive={pageNum === page}
+                          onClick={() => setPage(pageNum)}
+                        >
+                          {pageNum}
+                        </PaginationLink>
+                      </PaginationItem>
+                    );
+                  })}
+                  <PaginationNext 
+                    onClick={() => setPage(p => Math.min(pages, p + 1))}
+                    disabled={page === pages}
+                  />
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
+        </div>
       )}
     </>
-  ), [activeTab, inputSchema, inputData, handleDragStart, sourceNodeId, items, page, pages, renderCell]);
+  ), [activeTab, nodeSchema, nodeData, handleDragStart, items, page, pages, renderCell, selectedNode, nodeId]);
 
   return (
     <div style={{ transform: 'scale(0.75)', transformOrigin: 'top left', width: '133.33%', height: '133.33%' }}>
       <Card className="flex flex-col h-full bg-gray-100 dark:bg-[#09090b]">
-        {!inputData || inputData.info ? (
+        {!connectedInputNodes || connectedInputNodes.length === 0 ? (
           <EmptyState />
         ) : (
           <>
             <CardHeader className="flex flex-row justify-between items-center p-6">
-              <div className="flex flex-row items-center gap-4">
-                <Button variant="outline" className="font-bold">
-                  Input Data
-                </Button>
+              <div className="flex items-center justify-between w-full">
+                <div className="flex items-center gap-3">
+                  <Button variant="outline" className="font-bold">
+                    Input Data
+                  </Button>
+                  
+                  {/* Node Source Selector */}
+                  {connectedInputNodes.length > 1 && (
+                    <Select 
+                      value={String(selectedNodeIndex)} 
+                      onValueChange={(value) => setSelectedNodeIndex(parseInt(value))}
+                    >
+                      <SelectTrigger className="w-32">
+                        <SelectValue placeholder="Select source" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {connectedInputNodes.map((node, index) => (
+                          <SelectItem key={node.id} value={String(index)}>
+                            {node.type || node.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  
+                  {/* Node Status Badge */}
+                  {nodeStatus && getStatusLabel(nodeStatus)}
+                </div>
                 
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
                   <TabsList>
@@ -435,11 +644,16 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
               </div>
             </CardHeader>
 
-            <CardContent>
-              <div className="mt-4 overflow-auto h-full">
-                {inputData.loading ? (
-                  <div className="flex justify-center items-center">
-                    <Loader2 className="h-6 w-6 animate-spin" />
+            <CardContent className="overflow-hidden flex-1">
+              <div className="h-full overflow-auto">
+                {!nodeData ? (
+                  <div className="flex justify-center items-center h-full flex-col gap-4">
+                    <p className="text-muted-foreground">No result data available from this input node</p>
+                    {selectedNode && (
+                      <div className="text-xs text-muted-foreground">
+                        Connected to node: {selectedNode.id}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   renderContent()
@@ -448,29 +662,6 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId }) => {
             </CardContent>
           </>
         )}
-
-        <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
-          <DialogContent className="max-w-[95vw] max-h-[95vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="flex justify-between items-center w-full">
-                <span>Input Data (Expanded View)</span>
-                <Button variant="ghost" size="icon" onClick={() => setIsExpanded(false)}>
-                  <Icon icon="mdi:close" />
-                </Button>
-              </DialogTitle>
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
-                <TabsList>
-                  <TabsTrigger value="schema">Schema</TabsTrigger>
-                  <TabsTrigger value="json">JSON</TabsTrigger>
-                  <TabsTrigger value="table">Table</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </DialogHeader>
-            <div className="py-4">
-              {renderContent()}
-            </div>
-          </DialogContent>
-        </Dialog>
       </Card>
     </div>
   );

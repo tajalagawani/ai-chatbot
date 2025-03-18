@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Save, Play, AlertCircle } from 'lucide-react';
 import OperationsDropdown from './OperationsDropdown';
 import { FieldRenderer, OperationParameter } from './FieldComponents';
+import NodePanelHeader from './NodePanelHeader';
 
 // shadcn components
 import { Button } from '@/components/ui/button';
@@ -308,11 +309,7 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
   const handleOperationChange = (operation: string) => {
     if (operation === selectedOperation) return;
     
-    // Confirm if there are unsaved changes
-    if (!confirm("Changing operations will reset your changes. Continue?")) {
-      return;
-    }
-    
+    // No confirmation, just change the operation directly
     console.log(`Changing operation to: ${operation}`);
     setSelectedOperation(operation);
     fetchOperationDetails(operation);
@@ -391,253 +388,290 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
       const response = await fetch(`${API_BASE_URL}/execute/${apiNodeType}`, {
         method: 'POST',
         headers: {
-          body: JSON.stringify(formValuesRef.current)
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || 'Failed to execute node');
-        }
-        
-        const result = await response.json();
-        console.log("Execution result:", result);
-        
-        if (onExecutionComplete) {
-          onExecutionComplete(result);
-        }
-      } catch (err) {
-        console.error("Error executing node:", err);
-        setError(`Execution failed: ${err.message}`);
-      } finally {
-        setExecutingNode(false);
-      }
-    };
-  
-    // Sort and organize parameters for display - memoized to prevent recalculation
-    const organizedFields = useMemo(() => {
-      if (!operationDetails?.parameters?.operation_specific) return [];
-      
-      const fields = [];
-      
-      // First add all required parameters
-      Object.entries(operationDetails.parameters.operation_specific)
-        .filter(([key, param]) => param.required && key !== 'operation')
-        .forEach(([key, param]) => {
-          fields.push({ key, param });
-        });
-      
-      // Then add all optional parameters
-      Object.entries(operationDetails.parameters.operation_specific)
-        .filter(([key, param]) => !param.required && key !== 'operation')
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .forEach(([key, param]) => {
-          fields.push({ key, param });
-        });
-      
-      return fields;
-    }, [operationDetails]);
-  
-    // Check if current form has obsolete properties - memoized
-    const obsoleteProps = useMemo(() => {
-      if (!operationDetails) return [];
-      
-      const validFields = new Set(['operation']);
-      Object.keys(operationDetails.parameters.operation_specific).forEach(key => {
-        validFields.add(key);
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formValuesRef.current)
       });
       
-      return Object.keys(formValuesRef.current).filter(key => !validFields.has(key));
-    }, [operationDetails]);
-  
-    // Render a skeleton UI while loading initial data
-    const renderSkeleton = () => (
-      <div>
-        <div className="h-6 w-24 bg-gray-700 rounded animate-pulse mb-4"></div>
-        <div className="h-10 w-full bg-gray-700 rounded animate-pulse mb-6"></div>
-        <div className="space-y-6">
-          {[1, 2, 3, 4].map(i => (
-            <div key={i} className="space-y-2">
-              <div className="h-4 w-32 bg-gray-700 rounded animate-pulse"></div>
-              <div className="h-10 w-full bg-gray-700 rounded animate-pulse"></div>
-            </div>
-          ))}
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to execute node');
+      }
+      
+      const result = await response.json();
+      console.log("Execution result:", result);
+      
+      if (onExecutionComplete) {
+        onExecutionComplete(result);
+      }
+    } catch (err) {
+      console.error("Error executing node:", err);
+      setError(`Execution failed: ${err.message}`);
+    } finally {
+      setExecutingNode(false);
+    }
+  };
+
+  // Sort and organize parameters for display - memoized to prevent recalculation
+  const organizedFields = useMemo(() => {
+    if (!operationDetails?.parameters?.operation_specific) return [];
+    
+    const fields = [];
+    
+    // First add all required parameters
+    Object.entries(operationDetails.parameters.operation_specific)
+      .filter(([key, param]) => param.required && key !== 'operation')
+      .forEach(([key, param]) => {
+        fields.push({ key, param });
+      });
+    
+    // Then add all optional parameters
+    Object.entries(operationDetails.parameters.operation_specific)
+      .filter(([key, param]) => !param.required && key !== 'operation')
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([key, param]) => {
+        fields.push({ key, param });
+      });
+    
+    return fields;
+  }, [operationDetails]);
+
+  // Check if current form has obsolete properties - memoized
+  const obsoleteProps = useMemo(() => {
+    if (!operationDetails) return [];
+    
+    const validFields = new Set(['operation']);
+    Object.keys(operationDetails.parameters.operation_specific).forEach(key => {
+      validFields.add(key);
+    });
+    
+    return Object.keys(formValuesRef.current).filter(key => !validFields.has(key));
+  }, [operationDetails]);
+
+  // Render a skeleton UI while loading initial data
+  const renderSkeleton = () => (
+    <div>
+      <div className="h-10 w-full bg-gray-700 rounded animate-pulse mb-6"></div>
+      <div className="space-y-6">
+        {[1, 2, 3, 4].map(i => (
+          <div key={i} className="space-y-2">
+            <div className="h-4 w-32 bg-gray-700 rounded animate-pulse"></div>
+            <div className="h-10 w-full bg-gray-700 rounded animate-pulse"></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // Common styles for hiding scrollbars
+  const noScrollbarStyle = {
+    msOverflowStyle: "none",
+    scrollbarWidth: "none",
+  };
+
+  // Early render for loading state with skeleton UI
+  if (loading && !initialLoadComplete) {
+    return (
+      <div 
+        className="h-full overflow-auto text-foreground dark:text-white p-4"
+        style={noScrollbarStyle}
+      >
+        <NodePanelHeader nodeType={nodeType} nodeData={nodeData} />
+        <div className="pb-3">
+          <p className="text-sm text-muted-foreground dark:text-gray-300">
+            Loading parameters...
+          </p>
         </div>
+        {renderSkeleton()}
       </div>
     );
-  
-    // Early render for loading state with skeleton UI
-    if (loading && !initialLoadComplete) {
-      return (
-        <div className="h-full overflow-auto text-foreground dark:text-white p-4">
-          <div className="pb-3">
-            <h3 className="text-lg font-medium mb-1">
-              {nodeType || 'Node'} Settings
-            </h3>
-            <p className="text-sm text-muted-foreground dark:text-gray-300">
-              Loading parameters...
-            </p>
+  }
+
+  return (
+    <div 
+      className="h-full overflow-auto text-foreground dark:text-white"
+      style={noScrollbarStyle}
+    >
+      {/* Node Header with Icon and Info */}
+      <NodePanelHeader nodeType={nodeType} nodeData={nodeData} />
+      
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      
+      {operations.length > 0 && (
+        <OperationsDropdown
+          operations={operations}
+          selectedOperation={selectedOperation}
+          onSelect={handleOperationChange}
+          label="Available Operations"
+          placeholder="Search operations..."
+        />
+      )}
+      
+      {loadingOperation ? (
+        <div className="flex flex-col gap-4 py-2">
+          <div className="flex justify-start items-center py-2">
+            <div className="animate-spin w-5 h-5 border-2 border-primary border-t-transparent rounded-full mr-2"></div>
+            <span>Loading operation parameters...</span>
           </div>
           {renderSkeleton()}
         </div>
-      );
-    }
-  
-    return (
-      <div className="h-full overflow-auto text-foreground dark:text-white">
-        <div className="pb-3 flex justify-between items-center">
-          <div>
-            <h3 className="text-lg font-medium mb-1">
-              {nodeType || 'Node'} Settings
-            </h3>
-            <p className="text-sm text-muted-foreground dark:text-gray-300">
-              Configure node parameters for {selectedOperation || 'this operation'}
-            </p>
-          </div>
-        </div>
-        
-        {error && (
-          <Alert variant="destructive" className="mb-4">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-        
-        {operations.length > 0 && (
-          <OperationsDropdown
-            operations={operations}
-            selectedOperation={selectedOperation}
-            onSelect={handleOperationChange}
-            label="Available Operations"
-            placeholder="Search operations..."
-          />
-        )}
-        
-        {loadingOperation ? (
-          <div className="flex flex-col gap-4 py-2">
-            <div className="flex justify-start items-center py-2">
-              <div className="animate-spin w-5 h-5 border-2 border-primary border-t-transparent rounded-full mr-2"></div>
-              <span>Loading operation parameters...</span>
+      ) : operationDetails ? (
+        <form onSubmit={handleSubmit} className="mt-4">
+          {/* Operation description */}
+          {operationDetails.description && (
+            <div className="bg-muted dark:bg-[#0f0f10] p-3 rounded-md border border-input dark:border-zinc-800 mb-6">
+              <p className="text-sm text-muted-foreground dark:text-gray-300">{operationDetails.description}</p>
             </div>
-            {renderSkeleton()}
-          </div>
-        ) : operationDetails ? (
-          <form onSubmit={handleSubmit} className="mt-4">
-            {/* Operation description */}
-            {operationDetails.description && (
-              <div className="bg-muted dark:bg-[#0f0f10] p-3 rounded-md border border-input dark:border-zinc-800 mb-6">
-                <p className="text-sm text-muted-foreground dark:text-gray-300">{operationDetails.description}</p>
-              </div>
-            )}
-            
-            {/* Required notice */}
-            <div className="mb-4 flex items-center">
-              <span className="text-red-500 font-bold text-lg mr-1">*</span>
-              <span className="text-sm text-gray-300">Required fields</span>
-            </div>
-            
-            {/* Obsolete properties warning */}
-            {obsoleteProps.length > 0 && (
-              <Alert variant="warning" className="mb-6 bg-amber-900/30 border-amber-600 text-amber-200">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle className="text-amber-200">Obsolete Properties Detected</AlertTitle>
-                <AlertDescription className="text-amber-300/80">
-                  <p className="mb-2">The following properties are not recognized by the current operation and will be removed when saving:</p>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {obsoleteProps.map(prop => (
-                      <Badge key={prop} variant="outline" className="border-amber-500 text-amber-300">{prop}</Badge>
-                    ))}
-                  </div>
-                </AlertDescription>
-              </Alert>
-            )}
-            
-            {/* Parameters fields */}
-            <div className="space-y-2">
-              {organizedFields.map(({ key, param }) => (
-                <FieldRenderer 
-                  key={key} 
-                  param={param} 
-                  paramKey={key} 
-                  initialValue={formData[key]} 
-                  onChange={handleInputChange} 
-                />
-              ))}
-            </div>
-            
-            {/* Buttons */}
-            <div className="flex justify-between pt-4 border-t mt-8 border-input dark:border-zinc-800">
-              <Button
-                variant="outline"
-                onClick={handleExecute}
-                disabled={executingNode || !operationDetails}
-                className="flex items-center gap-2 px-4 bg-background dark:bg-[#0f0f10] text-foreground dark:text-white 
-                        hover:bg-muted dark:hover:bg-zinc-800 border-input dark:border-zinc-800"
-                type="button"
-              >
-                {executingNode ? (
-                  <>
-                    <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full"></div>
-                    <span>Executing...</span>
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4" />
-                    <span>Execute</span>
-                  </>
-                )}
-              </Button>
-              
-              <Button
-                type="submit"
-                onClick={handleSubmit}
-                disabled={!operationDetails}
-                className="flex items-center gap-2 px-4 bg-green-600 hover:bg-green-700 text-white"
-              >
-                <Save className="h-4 w-4" />
-                <span>Save</span>
-              </Button>
-            </div>
-            
-            {/* Parameter validation guidance */}
-            {operationDetails.documentation && (
-              <div className="mt-6 pt-4 border-t border-gray-700">
-                <details className="text-sm">
-                  <summary className="cursor-pointer text-blue-400 hover:text-blue-300">Parameter documentation</summary>
-                  <div className="mt-2 p-3 bg-gray-900 rounded text-gray-300">
-                    <div dangerouslySetInnerHTML={{ __html: operationDetails.documentation }} />
-                  </div>
-                </details>
-              </div>
-            )}
-          </form>
-        ) : (
-          <div className="py-4 text-center">
-            {operations.length > 0 
-              ? 'Select an operation to configure parameters' 
-              : `No operations found for node type: ${nodeType}`
-            }
-          </div>
-        )}
-        
-        {/* Show current node data in debug mode */}
-        <div className="mt-6 pt-2 border-t border-gray-700 text-xs">
-          <details>
-            <summary className="cursor-pointer text-gray-500 hover:text-gray-400">Debug: Current Node Data</summary>
-            <div className="mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-40">
-              <pre className="text-gray-400">{JSON.stringify(nodeData, null, 2)}</pre>
-            </div>
-          </details>
+          )}
           
-          <details className="mt-2">
-            <summary className="cursor-pointer text-gray-500 hover:text-gray-400">Debug: Current Form Data</summary>
-            <div className="mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-40">
-              <pre className="text-gray-400">{JSON.stringify(formValuesRef.current, null, 2)}</pre>
-            </div>
-          </details>
-        </div>
+          {/* Required notice */}
+          <div className="mb-4 flex items-center">
+            <span className="text-red-500 font-bold text-lg mr-1">*</span>
+            <span className="text-sm text-gray-300">Required fields</span>
+          </div>
+          
+
+{obsoleteProps.length > 0 && (
+  <Alert variant="warning" className="mb-6 bg-amber-900/30 border-amber-600 text-amber-200">
+    <AlertCircle className="h-4 w-4" />
+    <AlertTitle className="text-amber-200 flex justify-between items-center">
+      <span>Obsolete Properties Detected</span>
+      <Button
+        variant="destructive"
+        size="sm"
+        onClick={() => {
+          // Create a new form data object without the obsolete properties
+          const cleanFormData = {...formValuesRef.current};
+          
+          // Remove all obsolete properties
+          obsoleteProps.forEach(prop => {
+            delete cleanFormData[prop];
+          });
+          
+          // Update both the ref and state
+          formValuesRef.current = cleanFormData;
+          setFormData(cleanFormData);
+          
+          // Show confirmation message (optional)
+          setError("Obsolete properties have been removed. Click Save to apply changes.");
+          
+          // You could also automatically save here if desired
+          // handleSubmit(new Event('submit') as React.FormEvent);
+        }}
+        className="ml-2 text-xs h-6 px-2 bg-red-600 hover:bg-red-700"
+      >
+        Force Delete
+      </Button>
+    </AlertTitle>
+    <AlertDescription className="text-amber-300/80">
+      <p className="mb-2">The following properties are not recognized by the current operation and will be removed when saving:</p>
+      <div className="flex flex-wrap gap-2 mt-1">
+        {obsoleteProps.map(prop => (
+          <Badge key={prop} variant="outline" className="border-amber-500 text-amber-300">{prop}</Badge>
+        ))}
       </div>
-    );
-  };
-  
-  export default DynamicNodeSettings;
+    </AlertDescription>
+  </Alert>
+)}
+          
+          {/* Parameters fields */}
+          <div className="space-y-2">
+            {organizedFields.map(({ key, param }) => (
+              <FieldRenderer 
+                key={key} 
+                param={param} 
+                paramKey={key} 
+                initialValue={formData[key]} 
+                onChange={handleInputChange} 
+              />
+            ))}
+          </div>
+          
+          {/* Buttons */}
+          <div className="flex justify-between pt-4 border-t mt-8 border-input dark:border-zinc-800">
+            <Button
+              variant="outline"
+              onClick={handleExecute}
+              disabled={executingNode || !operationDetails}
+              className="flex items-center gap-2 px-4 bg-background dark:bg-[#0f0f10] text-foreground dark:text-white 
+                      hover:bg-muted dark:hover:bg-zinc-800 border-input dark:border-zinc-800"
+              type="button"
+            >
+              {executingNode ? (
+                <>
+                  <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full"></div>
+                  <span>Executing...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4" />
+                  <span>Execute</span>
+                </>
+              )}
+            </Button>
+            
+            <Button
+              type="submit"
+              onClick={handleSubmit}
+              disabled={!operationDetails}
+              className="flex items-center gap-2 px-4 bg-green-600 hover:bg-green-700 text-white"
+            >
+              <Save className="h-4 w-4" />
+              <span>Save</span>
+            </Button>
+          </div>
+          
+          {/* Parameter validation guidance */}
+          {operationDetails.documentation && (
+            <div className="mt-6 pt-4 border-t border-gray-700">
+              <details className="text-sm">
+                <summary className="cursor-pointer text-blue-400 hover:text-blue-300">Parameter documentation</summary>
+                <div className="mt-2 p-3 bg-gray-900 rounded text-gray-300">
+                  <div dangerouslySetInnerHTML={{ __html: operationDetails.documentation }} />
+                </div>
+              </details>
+            </div>
+          )}
+        </form>
+      ) : (
+        <div className="py-4 text-center">
+          {operations.length > 0 
+            ? 'Select an operation to configure parameters' 
+            : `No operations found for node type: ${nodeType}`
+          }
+        </div>
+      )}
+      
+      {/* Show current node data in debug mode */}
+      <div className="mt-6 pt-2 border-t border-gray-700 text-xs">
+        <details>
+          <summary className="cursor-pointer text-gray-500 hover:text-gray-400">Debug: Current Node Data</summary>
+          <div 
+            className="mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-40"
+            style={noScrollbarStyle}
+          >
+            <pre className="text-gray-400">{JSON.stringify(nodeData, null, 2)}</pre>
+          </div>
+        </details>
+        
+        <details className="mt-2">
+          <summary className="cursor-pointer text-gray-500 hover:text-gray-400">Debug: Current Form Data</summary>
+          <div 
+            className="mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-40"
+            style={noScrollbarStyle}
+          >
+            <pre className="text-gray-400">{JSON.stringify(formValuesRef.current, null, 2)}</pre>
+          </div>
+        </details>
+      </div>
+    </div>
+  );
+};
+
+export default DynamicNodeSettings;

@@ -77,6 +77,12 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
   // Use a ref to hold the local form values without causing re-renders
   const formValuesRef = useRef<any>({});
 
+  // Ref to store previous execution results
+  const previousResultsRef = useRef<any>({
+    result: nodeData?.result,
+    executionResponse: nodeData?.executionResponse
+  });
+
   // Extract essential props that should remain separate from operation data
   const essentialProps = useMemo(() => ['id', 'position_x', 'position_y', 'label', 'type'], []);
   
@@ -86,11 +92,17 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
     
     // Extract operation parameters from nodeData
     const operationParams = { ...nodeData };
+    
+    // Remove essential props
     essentialProps.forEach(prop => delete operationParams[prop]);
+    
+    // Remove result and executionResponse fields
+    delete operationParams.result;
+    delete operationParams.executionResponse;
     
     // Remove internal properties
     Object.keys(operationParams).forEach(key => {
-      if (key.startsWith('_') || key === 'nodeKind' || key === 'executionResponse' || key === 'status') {
+      if (key.startsWith('_') || key === 'nodeKind' || key === 'status') {
         delete operationParams[key];
       }
     });
@@ -350,6 +362,15 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
       }
     });
     
+    // Preserve previous execution results
+    if (previousResultsRef.current.result) {
+      cleanFormData.result = previousResultsRef.current.result;
+    }
+    
+    if (previousResultsRef.current.executionResponse) {
+      cleanFormData.executionResponse = previousResultsRef.current.executionResponse;
+    }
+    
     // Create a COMPLETELY NEW _originalProperties array with ONLY current valid properties
     const newOriginalProperties = [
       ...essentialProps.filter(prop => nodeData[prop] !== undefined),
@@ -385,6 +406,47 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
     try {
       console.log(`Executing ${apiNodeType} with params:`, formValuesRef.current);
       
+      // First save the current form data to ensure connected nodes see the latest parameters
+      // Handle the form submission silently
+      const essentialNodeProps = {};
+      essentialProps.forEach(prop => {
+        if (nodeData[prop] !== undefined) {
+          essentialNodeProps[prop] = nodeData[prop];
+        }
+      });
+      
+      const validParameters = new Set(['operation']);
+      if (operationDetails?.parameters?.operation_specific) {
+        Object.keys(operationDetails.parameters.operation_specific).forEach(key => {
+          validParameters.add(key);
+        });
+      }
+      
+      const cleanFormData = {};
+      Object.keys(formValuesRef.current).forEach(key => {
+        if (validParameters.has(key)) {
+          cleanFormData[key] = formValuesRef.current[key];
+        }
+      });
+      
+      // We don't add result or executionResponse here, as we're about to execute
+      // and get new results
+      
+      const newOriginalProperties = [
+        ...essentialProps.filter(prop => nodeData[prop] !== undefined),
+        ...Object.keys(cleanFormData)
+      ];
+      
+      const completeNodeData = {
+        ...essentialNodeProps,
+        ...cleanFormData,
+        _originalProperties: newOriginalProperties
+      };
+      
+      // Silently save the node data before execution
+      onSave(completeNodeData);
+      
+      // Now execute the node
       const response = await fetch(`${API_BASE_URL}/execute/${apiNodeType}`, {
         method: 'POST',
         headers: {
@@ -401,9 +463,61 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
       const result = await response.json();
       console.log("Execution result:", result);
       
+      // Update our reference to the latest results
+      previousResultsRef.current = {
+        result: result,
+        executionResponse: result
+      };
+      
+      // Store the result in the database using our agent results API
+      try {
+        // Create a unique execution ID for this run
+        const executionId = `exec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Save the result to our database
+        await fetch(`/api/agents/results`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            nodeId,
+            documentId: workflowId,
+            executionId,
+            status: 'completed',
+            result,
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString()
+          })
+        });
+        
+        console.log(`Saved execution result to database with executionId: ${executionId}`);
+      } catch (dbError) {
+        console.error("Failed to save result to database:", dbError);
+        // Continue even if database save fails
+      }
+      
+      // Ensure we include the nodeId in the result for proper tracking
+      if (result && typeof result === 'object') {
+        if (!result.nodeId) {
+          result.nodeId = nodeId;
+        }
+      }
+      
+      // Call the onExecutionComplete callback with the enhanced result
       if (onExecutionComplete) {
+        console.log("1. Calling onExecutionComplete with result:", result);
         onExecutionComplete(result);
       }
+      
+      // Add a small delay and call onExecutionComplete again to ensure results propagate
+      // This helps with race conditions in the UI component updates
+      setTimeout(() => {
+        if (onExecutionComplete) {
+          console.log("2. Calling onExecutionComplete again after delay");
+          onExecutionComplete(result);
+        }
+      }, 50);
     } catch (err) {
       console.error("Error executing node:", err);
       setError(`Execution failed: ${err.message}`);
@@ -445,7 +559,12 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
       validFields.add(key);
     });
     
-    return Object.keys(formValuesRef.current).filter(key => !validFields.has(key));
+    // Don't consider result and executionResponse as obsolete
+    return Object.keys(formValuesRef.current).filter(key => 
+      !validFields.has(key) && 
+      key !== 'result' && 
+      key !== 'executionResponse'
+    );
   }, [operationDetails]);
 
   // Render a skeleton UI while loading initial data
@@ -536,49 +655,59 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
             <span className="text-sm text-gray-300">Required fields</span>
           </div>
           
-
-{obsoleteProps.length > 0 && (
-  <Alert variant="warning" className="mb-6 bg-amber-900/30 border-amber-600 text-amber-200">
-    <AlertCircle className="h-4 w-4" />
-    <AlertTitle className="text-amber-200 flex justify-between items-center">
-      <span>Obsolete Properties Detected</span>
-      <Button
-        variant="destructive"
-        size="sm"
-        onClick={() => {
-          // Create a new form data object without the obsolete properties
-          const cleanFormData = {...formValuesRef.current};
+          {/* Show execution result status if available */}
+          {nodeData.result && (
+            <Alert variant={nodeData.result.status === "error" ? "destructive" : "default"} className="mb-6">
+              <AlertTitle>Last Execution Result</AlertTitle>
+              <AlertDescription>
+                {nodeData.result.status === "error" ? 
+                  `Error: ${nodeData.result.error || "Unknown error"}` : 
+                  "Successfully executed"}
+              </AlertDescription>
+            </Alert>
+          )}
           
-          // Remove all obsolete properties
-          obsoleteProps.forEach(prop => {
-            delete cleanFormData[prop];
-          });
-          
-          // Update both the ref and state
-          formValuesRef.current = cleanFormData;
-          setFormData(cleanFormData);
-          
-          // Show confirmation message (optional)
-          setError("Obsolete properties have been removed. Click Save to apply changes.");
-          
-          // You could also automatically save here if desired
-          // handleSubmit(new Event('submit') as React.FormEvent);
-        }}
-        className="ml-2 text-xs h-6 px-2 bg-red-600 hover:bg-red-700"
-      >
-        Force Delete
-      </Button>
-    </AlertTitle>
-    <AlertDescription className="text-amber-300/80">
-      <p className="mb-2">The following properties are not recognized by the current operation and will be removed when saving:</p>
-      <div className="flex flex-wrap gap-2 mt-1">
-        {obsoleteProps.map(prop => (
-          <Badge key={prop} variant="outline" className="border-amber-500 text-amber-300">{prop}</Badge>
-        ))}
-      </div>
-    </AlertDescription>
-  </Alert>
-)}
+          {obsoleteProps.length > 0 && (
+            <Alert variant="warning" className="mb-6 bg-amber-900/30 border-amber-600 text-amber-200">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle className="text-amber-200 flex justify-between items-center">
+                <span>Obsolete Properties Detected</span>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    // Create a new form data object without the obsolete properties
+                    const cleanFormData = {...formValuesRef.current};
+                    
+                    // Remove all obsolete properties except result and executionResponse
+                    obsoleteProps.forEach(prop => {
+                      if (prop !== 'result' && prop !== 'executionResponse') {
+                        delete cleanFormData[prop];
+                      }
+                    });
+                    
+                    // Update both the ref and state
+                    formValuesRef.current = cleanFormData;
+                    setFormData(cleanFormData);
+                    
+                    // Show confirmation message (optional)
+                    setError("Obsolete properties have been removed. Click Save to apply changes.");
+                  }}
+                  className="ml-2 text-xs h-6 px-2 bg-red-600 hover:bg-red-700"
+                >
+                  Force Delete
+                </Button>
+              </AlertTitle>
+              <AlertDescription className="text-amber-300/80">
+                <p className="mb-2">The following properties are not recognized by the current operation and will be removed when saving:</p>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {obsoleteProps.map(prop => (
+                    <Badge key={prop} variant="outline" className="border-amber-500 text-amber-300">{prop}</Badge>
+                  ))}
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
           
           {/* Parameters fields */}
           <div className="space-y-2">
@@ -667,6 +796,16 @@ const DynamicNodeSettings: React.FC<DynamicNodeSettingsProps> = ({
             style={noScrollbarStyle}
           >
             <pre className="text-gray-400">{JSON.stringify(formValuesRef.current, null, 2)}</pre>
+          </div>
+        </details>
+        
+        <details className="mt-2">
+          <summary className="cursor-pointer text-gray-500 hover:text-gray-400">Debug: Execution Results</summary>
+          <div 
+            className="mt-2 p-2 bg-gray-900 rounded overflow-auto max-h-40"
+            style={noScrollbarStyle}
+          >
+            <pre className="text-gray-400">{JSON.stringify(previousResultsRef.current, null, 2)}</pre>
           </div>
         </details>
       </div>

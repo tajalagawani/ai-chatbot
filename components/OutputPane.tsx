@@ -11,8 +11,16 @@ import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@iconify/react";
-import { Loader2, Copy, Check, AlertCircle, CheckCircle, Clock } from "lucide-react";
+import { Loader2, Copy, Check, AlertCircle, CheckCircle, Clock, History } from "lucide-react";
 import { useTheme } from 'next-themes';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // Simple JSON viewer component
 const JsonOut = ({ code, editable = false, onChange = () => {} }) => {
@@ -47,8 +55,9 @@ const JsonOut = ({ code, editable = false, onChange = () => {} }) => {
 interface OutputPaneProps {
   nodeId: string;
   workflowId: string;
-  executionResponse?: any;
   result?: any;
+  executionResponse?: any;
+  nodeStatus?: string | { status: string; message?: string; timestamp?: string };
 }
 
 interface DraggableItem {
@@ -64,6 +73,13 @@ interface SchemaViewProps {
   data: any;
   onDragStart: (event: React.DragEvent<HTMLElement>, item: DraggableItem) => void;
   sourceNodeId: string;
+}
+
+interface ExecutionResult {
+  data: any;
+  timestamp: number;
+  executionId?: string;
+  status?: string;
 }
 
 // Function to get status icon based on execution status
@@ -85,9 +101,12 @@ const getStatusIcon = (status) => {
 const getStatusLabel = (status) => {
   if (!status) return null;
   
+  // Handle if status is an object
+  const statusValue = typeof status === 'object' ? (status.status || 'completed') : status;
+  
   let color = 'bg-gray-100 text-gray-800';
   
-  switch (status) {
+  switch (statusValue) {
     case 'completed':
       color = 'bg-green-100 text-green-800';
       break;
@@ -104,8 +123,8 @@ const getStatusLabel = (status) => {
   
   return (
     <span className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs ${color}`}>
-      {getStatusIcon(status)}
-      <span className="capitalize">{status}</span>
+      {getStatusIcon(statusValue)}
+      <span className="capitalize">{statusValue}</span>
     </span>
   );
 };
@@ -150,7 +169,8 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
         </div>
         {value.type !== 'object' && value.type !== 'array' && (
           <span className="text-sm text-gray-500 truncate max-w-[50%]">
-            {typeof dataValue === 'object' ? JSON.stringify(dataValue) : String(dataValue)}
+            {typeof dataValue === 'object' ? JSON.stringify(dataValue || {}) : 
+              dataValue !== undefined && dataValue !== null ? String(dataValue) : ''}
           </span>
         )}
       </div>
@@ -218,7 +238,8 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
               </AccordionTrigger>
               <AccordionContent>
                 <pre className={`text-xs mt-2 whitespace-pre-wrap break-words p-2 rounded ${isDarkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'}`}>
-                  {typeof dataValue === 'object' ? JSON.stringify(dataValue, null, 2) : String(dataValue)}
+                  {typeof dataValue === 'object' ? JSON.stringify(dataValue || {}, null, 2) : 
+                    dataValue !== undefined && dataValue !== null ? String(dataValue) : ''}
                 </pre>
               </AccordionContent>
             </AccordionItem>
@@ -246,6 +267,43 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
   );
 });
 
+const ExecutionHistoryDropdown = ({ results, onSelectExecution, selectedIndex }) => {
+  if (!results || results.length <= 1) return null;
+  
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="flex items-center gap-2">
+          <History className="h-4 w-4" />
+          <span>Execution {selectedIndex + 1}</span>
+          <span className="text-xs text-muted-foreground">
+            ({new Date(results[selectedIndex].timestamp).toLocaleTimeString()})
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <DropdownMenuLabel>Execution History</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {results.map((result, index) => (
+          <DropdownMenuItem 
+            key={index}
+            onClick={() => onSelectExecution(index)}
+            className={selectedIndex === index ? "bg-muted" : ""}
+          >
+            <div className="flex items-center gap-2">
+              {result.status && getStatusIcon(result.status)}
+              <span>Execution {index + 1}</span>
+              <span className="text-xs text-muted-foreground">
+                ({new Date(result.timestamp).toLocaleTimeString()})
+              </span>
+            </div>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
 const columns = [
   { name: "NAME", uid: "name" },
   { name: "VALUE", uid: "value" },
@@ -258,29 +316,91 @@ const EmptyState = () => (
   <div className="flex flex-col items-center justify-center h-full gap-4">
     <div className="flex flex-col items-center gap-6 p-8 rounded-md border border-gray-700 bg-[#09090b]">
       <img 
-        src="https://cdn-icons-png.flaticon.com/512/9068/9068618.png"
-        alt="Results icon"
+        src="https://cdn-icons-png.flaticon.com/512/1160/1160358.png"
+        alt="Output icon"
         className="w-24 h-24 opacity-50 [filter:invert(40%)_sepia(0%)_saturate(100%)_hue-rotate(190deg)_brightness(90%)_contrast(95%)]"
       />
-      <p className="text-base text-gray-500 opacity-30">No Results Available</p>  
+      <p className="text-base text-gray-500 opacity-30">No Output Data Available</p>  
     </div>
     <p className="text-sm text-gray-500 opacity-40 max-w-md text-center">
-      Run the workflow to see execution results for this node
+      The node hasn't been executed yet or didn't produce any output
     </p>
   </div>
 );
 
-const OutputPane: React.FC<OutputPaneProps> = ({ nodeId, workflowId, executionResponse, result }) => {
+// Special component to show error details
+const ErrorView = ({ error, status }) => {
   const { theme, systemTheme } = useTheme();
   const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
-  const [outputData, setOutputData] = useState<any>({ loading: true });
+  
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/30 rounded-md p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <AlertCircle className="h-5 w-5 text-red-500" />
+          <h3 className="font-medium text-red-700 dark:text-red-400">Execution Failed</h3>
+        </div>
+        
+        <div className="text-sm text-red-800 dark:text-red-300 mb-2">
+          {typeof error === 'string' ? error : (error?.message || 'An error occurred during execution')}
+        </div>
+        
+        {status && (
+          <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+            {typeof status === 'object' ? (
+              <>
+                <span>Status: {status.status}</span>
+                {status.timestamp && (
+                  <span>Time: {new Date(status.timestamp).toLocaleTimeString()}</span>
+                )}
+              </>
+            ) : (
+              <span>Status: {status}</span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Special component to show node configuration details
+const ConfigurationView = ({ config }) => {
+  if (!config) return null;
+  
+  return (
+    <div className="mt-4">
+      <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Node Configuration</h3>
+      <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800 rounded-md p-4">
+        <pre className="text-xs overflow-auto max-h-48 text-slate-800 dark:text-slate-300">
+          {JSON.stringify(config, null, 2)}
+        </pre>
+      </div>
+    </div>
+  );
+};
+
+const OutputPane: React.FC<OutputPaneProps> = ({ 
+  nodeId, 
+  workflowId, 
+  result, 
+  executionResponse,
+  nodeStatus 
+}) => {
+  const { theme, systemTheme } = useTheme();
+  const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
   const [activeTab, setActiveTab] = useState("schema");
+  const [outputData, setOutputData] = useState<any>({ loading: true });
   const [draggableItems, setDraggableItems] = useState<DraggableItem[]>([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [page, setPage] = useState(1);
   const rowsPerPage = 11;
   const [hasData, setHasData] = useState(false);
-  const [nodeStatus, setNodeStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  
+  // State for execution history
+  const [executionResults, setExecutionResults] = useState<ExecutionResult[]>([]);
+  const [selectedExecutionIndex, setSelectedExecutionIndex] = useState(0);
 
   const generateDraggableItems = useCallback((data: any, sourceNodeId: string, prefix = ''): DraggableItem[] => {
     let items: DraggableItem[] = [];
@@ -349,54 +469,203 @@ const OutputPane: React.FC<OutputPaneProps> = ({ nodeId, workflowId, executionRe
     }
   }, []);
 
-  useEffect(() => {
-    const processData = () => {
-      try {
-        // Prioritize result prop over executionResponse
-        let dataToProcess = result || executionResponse;
-        
-        if (dataToProcess) {
-          setHasData(true);
-          
-          // Extract status if available
-          if (dataToProcess.status) {
-            setNodeStatus(dataToProcess.status.status || (typeof dataToProcess.status === 'string' ? dataToProcess.status : null));
-          }
-          
-          // Handle special data formats
-          if (dataToProcess.result?.choices?.[0]?.message?.content) {
-            // For OpenAI/Claude API type responses, highlight the content
-            const content = dataToProcess.result.choices[0].message.content;
-            setOutputData({
-              content: content,
-              raw: dataToProcess
-            });
-          } else if (dataToProcess.body) {
-            // For API responses, highlight the body
-            setOutputData({
-              body: dataToProcess.body,
-              raw: dataToProcess
-            });
-          } else {
-            // Use the data as is
-            setOutputData(dataToProcess);
-          }
-          
-          // Generate draggable items from the data
-          const items = generateDraggableItems(dataToProcess, nodeId);
-          setDraggableItems(items);
-        } else {
-          setHasData(false);
-          setOutputData({ message: "No execution response available" });
-        }
-      } catch (error) {
-        console.error('OutputPane: Error processing data:', error);
-        setOutputData({ error: error.message });
-      }
-    };
+  // Try to find execution data from global flow data if not provided in props
+  const findExecutionDataFromGlobal = useCallback(() => {
+    if (typeof window === 'undefined' || !window._flowNodes) return null;
     
-    processData();
-  }, [nodeId, workflowId, executionResponse, result, generateDraggableItems]);
+    const globalNode = window._flowNodes.find(n => n.id === nodeId);
+    if (!globalNode) return null;
+    
+    console.log("Found node in global data:", nodeId);
+    
+    // Check for execution data in different possible locations
+    if (globalNode.data?.executionResult?.results?.[nodeId]) {
+      console.log("Found result in global executionResult");
+      return globalNode.data.executionResult.results[nodeId];
+    }
+    
+    if (globalNode.data?.result) {
+      console.log("Found direct result in global node data");
+      return globalNode.data.result;
+    }
+    
+    // Check for status that might indicate an error
+    if (globalNode.data?.status?.status === 'failed') {
+      console.log("Found failed status in global node data");
+      return {
+        error: globalNode.data.status.message || "Execution failed",
+        status: globalNode.data.status,
+        timestamp: globalNode.data.status.timestamp || Date.now()
+      };
+    }
+    
+    return null;
+  }, [nodeId]);
+
+  // Process the node result data with improved error handling
+  useEffect(() => {
+    console.group("OutputPane Debug");
+    console.log("Node ID:", nodeId);
+    console.log("Full props dump:", {
+      result: result ? typeof result : 'null',
+      resultValue: result,
+      executionResponse: executionResponse ? typeof executionResponse : 'null',
+      executionResponseValue: executionResponse,
+      nodeData: result
+    });
+    
+    if (result && typeof result === 'object') {
+      console.log("Result keys:", Object.keys(result));
+      
+      // Check for specific properties that indicate error state
+      if (result.status?.status === 'failed' || result.execution_status?.status === 'failed') {
+        console.log("Found failed status in result");
+        setError(result.status?.message || result.execution_status?.message || "Execution failed");
+      }
+      
+      // Check for direct error property
+      if (result.error) {
+        console.log("Found direct error property");
+        setError(typeof result.error === 'string' ? result.error : (result.error.message || JSON.stringify(result.error)));
+      }
+    }
+    console.groupEnd();
+    
+    // IMPROVED RESULT DETECTION - check all possible sources thoroughly
+    let actualResultData = null;
+    let resultSource = 'none';
+    
+    // First check if result is an execution status wrapper with configuration
+    if (result && typeof result === 'object' && 
+        (result.execution_status || result.status) && 
+        result.configuration) {
+      console.log("Using execution status wrapper with configuration");
+      actualResultData = result;
+      resultSource = 'status-wrapper';
+      
+      // Set error if this is a failed execution
+      const status = result.execution_status?.status || result.status?.status;
+      if (status === 'failed') {
+        setError(result.execution_status?.message || result.status?.message || result.error || "Execution failed");
+      }
+    }
+    // Check regular result property
+    else if (result && typeof result === 'object') {
+      if (result.result !== null && result.result !== undefined) {
+        console.log("Using result.result property");
+        actualResultData = result.result;
+        resultSource = 'result-property';
+      } else {
+        console.log("Using direct result object");
+        actualResultData = result;
+        resultSource = 'direct-result';
+      }
+    }
+    // Then check execution response
+    else if (executionResponse && typeof executionResponse === 'object') {
+      actualResultData = executionResponse;
+      resultSource = 'executionResponse';
+    }
+    // Last resort - try to find data from global flow data
+    else {
+      const globalData = findExecutionDataFromGlobal();
+      if (globalData) {
+        actualResultData = globalData;
+        resultSource = 'global-data';
+      }
+    }
+    
+    console.log(`Using result data from: ${resultSource}`);
+    
+    if (!actualResultData) {
+      setHasData(false);
+      setOutputData({ message: "No output data available" });
+      setExecutionResults([]);
+      return;
+    }
+    
+    try {
+      // Collect all execution results with timestamps
+      const allResults: ExecutionResult[] = [];
+      
+      // Add current result with current timestamp
+      allResults.push({
+        data: actualResultData,
+        timestamp: Date.now(),
+        status: nodeStatus ? (typeof nodeStatus === 'object' ? nodeStatus.status : nodeStatus) : 
+                (actualResultData.status?.status || actualResultData.execution_status?.status || 'completed')
+      });
+      
+      // Check for historical execution results if available
+      const executionHistory = actualResultData._executionHistory || [];
+      
+      executionHistory.forEach(histEntry => {
+        if (histEntry.result) {
+          allResults.push({
+            data: histEntry.result,
+            timestamp: histEntry.timestamp || Date.now() - 1000,
+            executionId: histEntry.executionId,
+            status: histEntry.status
+          });
+        }
+      });
+      
+      // Sort by timestamp descending (newest first)
+      if (allResults.length > 0) {
+        allResults.sort((a, b) => b.timestamp - a.timestamp);
+        
+        // Update the execution results
+        setExecutionResults(allResults);
+        
+        // Use selected result based on index (defaulting to latest)
+        const resultToUse = allResults[selectedExecutionIndex] || allResults[0];
+        setHasData(true);
+        
+        // Handle special data formats - focus on most important parts first
+        const dataToUse = resultToUse.data;
+        
+        if (dataToUse.choices?.[0]?.message?.content) {
+          // For OpenAI/Claude API type responses, highlight the content
+          const content = dataToUse.choices[0].message.content;
+          setOutputData({
+            content: content,
+            raw: dataToUse
+          });
+        } else if (dataToUse.body) {
+          // For API responses, highlight the body
+          setOutputData({
+            body: dataToUse.body,
+            raw: dataToUse
+          });
+        } else if (dataToUse.configuration) {
+          // For execution status wrappers, include both status and configuration
+          setOutputData({
+            execution_status: dataToUse.execution_status || dataToUse.status,
+            message: dataToUse.message,
+            error: dataToUse.error,
+            configuration: dataToUse.configuration,
+            timestamp: dataToUse.timestamp
+          });
+        } else {
+          // Use the data as is
+          setOutputData(dataToUse);
+        }
+        
+        // Generate draggable items from the data
+        const items = generateDraggableItems(dataToUse, nodeId);
+        setDraggableItems(items);
+      } else {
+        setHasData(false);
+        setOutputData({ message: "No result data available" });
+        setDraggableItems([]);
+      }
+    } catch (error) {
+      console.error('OutputPane: Error processing data:', error);
+      setOutputData({ error: error.message });
+      setDraggableItems([]);
+      setExecutionResults([]);
+    }
+  }, [nodeId, result, executionResponse, nodeStatus, selectedExecutionIndex, generateDraggableItems, findExecutionDataFromGlobal]);
 
   const outputSchema = useMemo(() => generateSchemaFromData(outputData), [outputData, generateSchemaFromData]);
 
@@ -412,6 +681,7 @@ const OutputPane: React.FC<OutputPaneProps> = ({ nodeId, workflowId, executionRe
     
     if (typeof value === 'object') {
       try {
+        if (!value) return '{}';
         if (Object.keys(value).length > 3) {
           return JSON.stringify({
             ...Object.fromEntries(
@@ -495,6 +765,22 @@ const OutputPane: React.FC<OutputPaneProps> = ({ nodeId, workflowId, executionRe
 
   const renderContent = useCallback(() => (
     <>
+      {/* If there's an error, show it first */}
+      {error && (
+        <ErrorView 
+          error={error} 
+          status={nodeStatus || 
+                  (result?.status) || 
+                  (result?.execution_status)}
+        />
+      )}
+      
+      {/* Show configuration if available in a status wrapper */}
+      {outputData?.configuration && (
+        <ConfigurationView config={outputData.configuration} />
+      )}
+      
+      {/* Regular content display */}
       {activeTab === "schema" && (
         <SchemaView 
           schema={outputSchema} 
@@ -505,121 +791,94 @@ const OutputPane: React.FC<OutputPaneProps> = ({ nodeId, workflowId, executionRe
       )}
       {activeTab === "json" && (
         <JsonOut 
-          code={JSON.stringify(outputData, null, 2)} 
-          editable={false} 
-        />
-      )}
-      {activeTab === "table" && (
-        <div className="flex flex-col h-full">
-          <div className="overflow-y-auto flex-1">
-            <Table>
-              <TableHeader>
-                {columns.map((column) => (
-                  <TableHead key={column.uid} className={column.uid === "actions" ? "text-center" : "text-left"}>
-                    {column.name}
-                  </TableHead>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.id} draggable onDragStart={(event) => handleDragStart(event, item)}>
-                    {columns.map((column) => (
-                      <TableCell key={column.uid}>{renderCell(item, column.uid)}</TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-          
-          {pages > 1 && (
-            <div className="flex w-full justify-center py-4 border-t">
-              <Pagination>
-                <PaginationContent>
-                  <PaginationPrevious 
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                  />
-                  {Array.from({ length: Math.min(5, pages) }).map((_, i) => {
-                    const pageNum = i + 1;
-                    return (
-                      <PaginationItem key={pageNum}>
-                        <PaginationLink
-                          isActive={pageNum === page}
-                          onClick={() => setPage(pageNum)}
-                        >
-                          {pageNum}
-                        </PaginationLink>
-                      </PaginationItem>
-                    );
-                  })}
-                  <PaginationNext 
-                    onClick={() => setPage(p => Math.min(pages, p + 1))}
-                    disabled={page === pages}
-                  />
-                </PaginationContent>
-              </Pagination>
-            </div>
-          )}
+        code={JSON.stringify(outputData, null, 2)} 
+        editable={false} 
+      />
+    )}
+    {activeTab === "table" && (
+      <div className="flex flex-col h-full">
+        <div className="overflow-y-auto flex-1">
+          <Table>
+            <TableHeader>
+              {columns.map((column) => (
+                <TableHead key={column.uid} className={column.uid === "actions" ? "text-center" : "text-left"}>
+                  {column.name}
+                </TableHead>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.id} draggable onDragStart={(event) => handleDragStart(event, item)}>
+                  {columns.map((column) => (
+                    <TableCell key={column.uid}>{renderCell(item, column.uid)}</TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
-      )}
-    </>
-  ), [activeTab, outputSchema, outputData, handleDragStart, items, page, pages, renderCell, nodeId]);
+        
+        {pages > 1 && (
+          <div className="flex w-full justify-center py-4 border-t">
+            <Pagination>
+              <PaginationContent>
+                <PaginationPrevious 
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                />
+                {Array.from({ length: Math.min(5, pages) }).map((_, i) => {
+                  const pageNum = i + 1;
+                  return (
+                    <PaginationItem key={pageNum}>
+                      <PaginationLink
+                        isActive={pageNum === page}
+                        onClick={() => setPage(pageNum)}
+                      >
+                        {pageNum}
+                      </PaginationLink>
+                    </PaginationItem>
+                  );
+                })}
+                <PaginationNext 
+                  onClick={() => setPage(p => Math.min(pages, p + 1))}
+                  disabled={page === pages}
+                />
+              </PaginationContent>
+            </Pagination>
+          </div>
+        )}
+      </div>
+    )}
+  </>
+), [activeTab, outputSchema, outputData, handleDragStart, items, page, pages, renderCell, nodeId, error, nodeStatus, result]);
 
-  return (
-    <div style={{ transform: 'scale(0.75)', transformOrigin: 'top left', width: '133.33%', height: '133.33%' }}>
-      <Card className="flex flex-col h-full bg-gray-100 dark:bg-[#09090b]">
-        {!hasData ? (
-          <EmptyState />
-        ) : (
-          <>
-            <CardHeader className="flex flex-row justify-between items-center p-6">
-              <div className="flex items-center justify-between w-full">
-                <div className="flex items-center gap-3">
-                  <Button variant="outline" className="font-bold">
-                    Node Results
-                  </Button>
-                  
-                  {/* Node Status Badge */}
-                  {nodeStatus && getStatusLabel(nodeStatus)}
-                </div>
+return (
+  <div style={{ transform: 'scale(0.75)', transformOrigin: 'top left', width: '133.33%', height: '133.33%' }}>
+    <Card className="flex flex-col h-full bg-gray-100 dark:bg-[#09090b]">
+      {!hasData ? (
+        <EmptyState />
+      ) : (
+        <>
+          <CardHeader className="flex flex-row justify-between items-center p-6">
+            <div className="flex items-center justify-between w-full">
+              <div className="flex items-center gap-3">
+                <Button variant="outline" className="font-bold">
+                  Node Output
+                </Button>
                 
-                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
-                  <TabsList>
-                    <TabsTrigger value="schema">Schema</TabsTrigger>
-                    <TabsTrigger value="json">JSON</TabsTrigger>
-                    <TabsTrigger value="table">Table</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-              </div>
-            </CardHeader>
-
-            <CardContent className="overflow-hidden flex-1">
-              <div className="h-full overflow-auto">
-                {outputData.loading ? (
-                  <div className="flex justify-center items-center h-full">
-                    <Loader2 className="h-6 w-6 animate-spin" />
-                  </div>
-                ) : (
-                  renderContent()
+                {/* Node Status Badge */}
+                {nodeStatus && getStatusLabel(nodeStatus)}
+                
+                {/* Execution History Dropdown */}
+                {executionResults.length > 1 && (
+                  <ExecutionHistoryDropdown
+                    results={executionResults}
+                    onSelectExecution={setSelectedExecutionIndex}
+                    selectedIndex={selectedExecutionIndex}
+                  />
                 )}
               </div>
-            </CardContent>
-          </>
-        )}
-
-        <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
-          <DialogContent className="max-w-[95vw] max-h-[95vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="flex justify-between items-center w-full">
-                <div className="flex items-center gap-3">
-                  <span>Results Data (Expanded View)</span>
-                  {nodeStatus && getStatusLabel(nodeStatus)}
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => setIsExpanded(false)}>
-                  <Icon icon="mdi:close" />
-                </Button>
-              </DialogTitle>
+              
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
                 <TabsList>
                   <TabsTrigger value="schema">Schema</TabsTrigger>
@@ -627,15 +886,58 @@ const OutputPane: React.FC<OutputPaneProps> = ({ nodeId, workflowId, executionRe
                   <TabsTrigger value="table">Table</TabsTrigger>
                 </TabsList>
               </Tabs>
-            </DialogHeader>
-            <div className="py-4">
-              {renderContent()}
             </div>
-          </DialogContent>
-        </Dialog>
-      </Card>
-    </div>
-  );
+          </CardHeader>
+
+          <CardContent className="overflow-hidden flex-1 flex flex-col">
+            <div className="h-full overflow-auto">
+              {outputData.loading ? (
+                <div className="flex justify-center items-center h-full">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                </div>
+              ) : (
+                renderContent()
+              )}
+            </div>
+          </CardContent>
+        </>
+      )}
+
+      <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
+        <DialogContent className="max-w-[95vw] max-h-[95vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex justify-between items-center w-full">
+              <div className="flex items-center gap-3">
+                <span>Output Data (Expanded View)</span>
+                {nodeStatus && getStatusLabel(nodeStatus)}
+                {executionResults.length > 1 && (
+                  <ExecutionHistoryDropdown
+                    results={executionResults}
+                    onSelectExecution={setSelectedExecutionIndex}
+                    selectedIndex={selectedExecutionIndex}
+                  />
+                )}
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setIsExpanded(false)}>
+                <Icon icon="mdi:close" />
+              </Button>
+            </DialogTitle>
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
+              <TabsList>
+                <TabsTrigger value="schema">Schema</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+                <TabsTrigger value="table">Table</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </DialogHeader>
+          <div className="py-4">
+            {renderContent()}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  </div>
+);
 };
 
 export default React.memo(OutputPane);

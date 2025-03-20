@@ -6,7 +6,7 @@ import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById, 
   updateChatVisiblityById 
-} from '@/lib/db/queries';
+} from '@/lib/db/neo4j-queries';  // Updated import path
 import { VisibilityType } from '@/components/visibility-selector';
 import { myProvider } from '@/lib/ai/models';
 

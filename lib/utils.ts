@@ -9,7 +9,7 @@ import type {
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import type { Message as DBMessage, Document } from '@/lib/db/schema';
+import type { Neo4jMessage as DBMessage, Neo4jDocument as Document } from '@/lib/db/neo4j-types';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

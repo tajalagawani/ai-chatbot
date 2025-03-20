@@ -1,5 +1,5 @@
 import { auth } from '@/app/(auth)/auth';
-import { getVotesByChatId, voteMessage } from '@/lib/db/queries';
+import { getVotesByChatId, voteMessage } from '@/lib/db/neo4j-queries';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

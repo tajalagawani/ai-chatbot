@@ -2,7 +2,8 @@
 
 import { z } from 'zod';
 
-import { createUser, getUser } from '@/lib/db/queries';
+// Change this import to use the Neo4j queries instead of the PostgreSQL ones
+import { createUser, getUser } from '@/lib/db/neo4j-queries';
 
 import { signIn } from './auth';
 

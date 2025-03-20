@@ -242,7 +242,18 @@ function determineNodeKind(node: any, workflow: any): 'Input' | 'Core' | 'Output
   return 'Default';
 }
 
-// Updated to strictly preserve only properties in _originalProperties 
+// List of execution-related properties that should never be saved in ACT content
+const EXECUTION_PROPERTIES = [
+  'result', 
+  'executionResponse', 
+  'status', 
+  'executionResult',
+  'executionOutput', 
+  '_executionData', 
+  '_result'
+];
+
+// Updated to strictly preserve only properties in _originalProperties and filter execution data
 function getActContentFromFlow(
   nodes: Node[], 
   edges: Edge[], 
@@ -263,15 +274,16 @@ function getActContentFromFlow(
       
       // Get the list of properties that should be included (and ensure it exists)
       const propertiesToKeep = Array.isArray(node.data._originalProperties) 
-        ? [...node.data._originalProperties] 
+        ? [...node.data._originalProperties].filter(prop => !EXECUTION_PROPERTIES.includes(prop))
         : ['id', 'position_x', 'position_y', 'type', 'label'];
       
-      // Add _originalProperties to the clean node
+      // Add _originalProperties to the clean node (filtered to remove execution data)
       cleanNode._originalProperties = propertiesToKeep;
       
       // ONLY copy properties that are explicitly listed in _originalProperties
       propertiesToKeep.forEach(propName => {
-        if (propName !== 'id' && propName !== 'position_x' && propName !== 'position_y' && !propName.startsWith('_')) {
+        if (propName !== 'id' && propName !== 'position_x' && propName !== 'position_y' && 
+            !propName.startsWith('_') && !EXECUTION_PROPERTIES.includes(propName)) {
           // Copy the property from node.data to ensure we get the latest value
           cleanNode[propName] = node.data[propName];
         }
@@ -334,7 +346,7 @@ function getActContentFromFlow(
     
     // Get list of properties to include (excluding internal ones)
     const propertiesToInclude = (nodeData._originalProperties || [])
-      .filter(prop => !prop.startsWith('_'));
+      .filter(prop => !prop.startsWith('_') && !EXECUTION_PROPERTIES.includes(prop));
     
     // Only include properties that are in the _originalProperties array
     Object.entries(nodeData)
@@ -414,7 +426,6 @@ export function isActContent(content: string): boolean {
     (content.includes('start_node') && content.includes('position_'))
   );
 }
-
 export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({ 
   content, 
   isStreaming,
@@ -445,7 +456,7 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
   const originalSectionsRef = useRef<ActContentSections | null>(null);
   const savingNodesRef = useRef(false);
   const nodeStatusRef = useRef<Record<string, any>>({});
-  const nodeResultsRef = useRef<Record<string, any>>({});  // Add this ref to track node results
+  const nodeResultsRef = useRef<Record<string, any>>({});  // Keeps track of node results
   
   // Debug info
   const [lastSavedTime, setLastSavedTime] = useState<Date | null>(null);
@@ -593,9 +604,10 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
             previousNodesRef.current[node.id].position_x = node.position.x;
             previousNodesRef.current[node.id].position_y = node.position.y;
             
-            // Also update any additional properties from node.data that should be preserved
+            // Update any non-execution properties from node.data that should be preserved
             Object.entries(node.data).forEach(([key, value]) => {
               if (key !== 'id' && key !== 'position' && key !== '__reactFlow' &&
+                  !EXECUTION_PROPERTIES.includes(key) &&
                   previousNodesRef.current[node.id]._originalProperties?.includes(key)) {
                 previousNodesRef.current[node.id][key] = value;
               }
@@ -672,7 +684,6 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
         label: `New Node ${nodeId}`,
         position_x: newNode.position.x,
         position_y: newNode.position.y,
-        Results : newNode.data?.Results || nodeResultsRef.current[nodeId],
         type: 'process',
         _originalProperties: ['type', 'label', 'position_x', 'position_y']
       };
@@ -681,24 +692,27 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     setHasUnsavedChanges(true);
   }, [setNodes, generateNodeId]);
 
+  // Modified to filter out execution data from node properties
   const handleNodeDataChange = useCallback((id: string, newData: any) => {
     console.log("Node data completely replaced:", id, newData);
     
-    // For React Flow nodes state - completely replace data
+    // Filter out execution-related properties from node data
+    const { result, executionResponse, status, ...filteredData } = newData;
+    
+    // For React Flow nodes state - use filtered data
     setNodes(nds => 
       nds.map(node => {
         if (node.id === id) {
-          // Keep only position and id, replace all other data
+          // Keep only position and id, replace all other data with filtered data
           return { 
             ...node, 
             data: {
+              ...filteredData,
               id: node.id,
-              // Add only the new data properties
-              ...newData,
-              // Preserve status if it exists
-              status: node.data?.status || nodeStatusRef.current[id],
-              // Preserve node results if they exist
-              result: node.data?.result || nodeResultsRef.current[id]
+              // Preserve status from ref, not from node data directly
+              status: nodeStatusRef.current[id],
+              // Provide a function to get results instead of storing directly
+              getNodeResult: () => nodeResultsRef.current[id]
             } 
           };
         }
@@ -706,21 +720,22 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       })
     );
     
-    // For previousNodesRef - completely replace all parameters
+    // For previousNodesRef - only store config properties, not result data
     if (previousNodesRef.current[id]) {
       // Keep only essential positioning properties
       const position_x = previousNodesRef.current[id].position_x;
       const position_y = previousNodesRef.current[id].position_y;
       
-      // Create a completely new object with just position and ID
+      // Create a completely new object with just position and ID and filtered data
       previousNodesRef.current[id] = {
         id: id,
         position_x: position_x,
         position_y: position_y,
-        // Add all new properties
-        ...newData,
-        // Create new empty originalProperties array to track only new properties
-        _originalProperties: Object.keys(newData)
+        // Add all filtered data
+        ...filteredData,
+        // Update _originalProperties array to track only config properties
+        _originalProperties: Object.keys(filteredData)
+          .filter(key => !EXECUTION_PROPERTIES.includes(key))
       };
     }
     
@@ -730,15 +745,16 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       const position_x = originalSectionsRef.current.nodes[id].position_x;
       const position_y = originalSectionsRef.current.nodes[id].position_y;
       
-      // Create a completely new object with just position and ID
+      // Create a completely new object with just position and ID and filtered data
       originalSectionsRef.current.nodes[id] = {
         id: id,
         position_x: position_x,
         position_y: position_y,
-        // Add all new properties
-        ...newData,
-        // Create new empty originalProperties array to track only new properties
-        _originalProperties: Object.keys(newData)
+        // Add all filtered data
+        ...filteredData,
+        // Update _originalProperties array to track only config properties
+        _originalProperties: Object.keys(filteredData)
+          .filter(key => !EXECUTION_PROPERTIES.includes(key))
       };
     }
     
@@ -782,6 +798,12 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     setHasUnsavedChanges(true);
   }, [setNodes, setEdges]);
 
+  // Get node result function that can be called by BaseNode when needed
+  const getNodeResult = useCallback((nodeId: string) => {
+    return nodeResultsRef.current[nodeId] || 
+           metadata?.executionResult?.results?.[nodeId];
+  }, [metadata?.executionResult?.results]);
+
   // Enhanced effect to properly process execution data from metadata
   useEffect(() => {
     // Skip if no metadata or nodeStatus
@@ -793,13 +815,16 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
       ...metadata.nodeStatus
     };
     
-    // Update nodes with status information
+    // Update nodes with status information - but don't store results directly in node data
     setNodes(currentNodes => 
       currentNodes.map(node => ({
         ...node,
         data: {
           ...node.data,
-          status: metadata.nodeStatus[node.id] || nodeStatusRef.current[node.id] || node.data.status
+          status: metadata.nodeStatus[node.id] || nodeStatusRef.current[node.id] || node.data.status,
+          // Provide function to get results instead of storing directly
+          getNodeResult: () => nodeResultsRef.current[node.id] || 
+                              metadata?.executionResult?.results?.[node.id]
         }
       }))
     );
@@ -808,33 +833,35 @@ export const ActFlowVisualizer: React.FC<ActFlowVisualizerProps> = ({
     setLastStatusUpdate(new Date());
     
     console.log('Updated flow nodes with execution data:', Object.keys(metadata.nodeStatus).length, 'nodes');
-  }, [metadata?.nodeStatus, setNodes]);
+  }, [metadata?.nodeStatus, setNodes, metadata?.executionResult?.results]);
 
-// Add this effect to your ActFlowVisualizer component to expose nodes and edges globally
-useEffect(() => {
-  // Make nodes and edges available globally for components that need them
-  window._flowNodes = nodes.map(node => ({
-    ...node,
-    data: {
-      ...node.data,
-      // Make sure results are included in the global nodes
-      result: node.data?.result || nodeResultsRef.current[node.id],
-      // Make sure execution responses are included in the global nodes
-      executionResponse: node.data?.executionResponse || 
-                        (metadata?.executionResult?.results && 
-                         metadata.executionResult.results[node.id])
-    }
-  }));
-  window._flowEdges = edges;
+  // Add this effect to expose nodes and edges globally
+  useEffect(() => {
+    // Make nodes and edges available globally for components that need them
+    window._flowNodes = nodes.map(node => ({
+      ...node,
+      data: {
+        ...node.data,
+        // Add result from ref to the global data structure only (not to the nodes)
+        result: nodeResultsRef.current[node.id],
+        // Add execution response from metadata to global data structure only
+        executionResponse: metadata?.executionResult?.results && 
+                         metadata.executionResult.results[node.id]
+      }
+    }));
+    window._flowEdges = edges;
+    
+    // Add debug information
+    console.log('Global flow data updated:', 
+      window._flowNodes.length, 'nodes,', 
+      window._flowEdges.length, 'edges'
+    );
+  }, [nodes, edges, metadata?.executionResult?.results]);
   
-  // Add debug information
-  console.log('Global flow data updated:', 
-    window._flowNodes.length, 'nodes,', 
-    window._flowEdges.length, 'edges'
-  );
-}, [nodes, edges, metadata?.executionResult?.results]);  useEffect(() => {
+  useEffect(() => {
     // Skip if no execution results
-    if (!metadata?.executionResult?.results || Object.keys(metadata.executionResult.results).length === 0) return;
+    if (!metadata?.executionResult?.results || 
+        Object.keys(metadata.executionResult.results).length === 0) return;
     
     // Store the node results in our ref for persistence
     nodeResultsRef.current = {
@@ -842,558 +869,589 @@ useEffect(() => {
       ...metadata.executionResult.results
     };
     
-    // Update nodes with result information
+    // Update nodes to provide access to results via function - but don't store directly in node data
     setNodes(currentNodes => 
       currentNodes.map(node => ({
         ...node,
         data: {
           ...node.data,
-          result: metadata.executionResult.results[node.id] || 
-                  nodeResultsRef.current[node.id] || 
-                  node.data.result
+          // Update the function to get results instead of storing directly
+          getNodeResult: () => nodeResultsRef.current[node.id] || 
+                              metadata.executionResult.results[node.id]
         }
       }))
     );
     
-    console.log('Updated flow nodes with execution results:', 
+    console.log('Updated flow nodes to access execution results:', 
       Object.keys(metadata.executionResult.results).length, 'nodes');
   }, [metadata?.executionResult?.results, setNodes]);
 
-  // Add a separate effect for real-time node status updates during execution
-  useEffect(() => {
-    // Skip if no execution in progress
-    if (!metadata?.executionId || !metadata?.port || metadata?.executionStatus !== 'running') return;
+// Add a separate effect for real-time node status updates during execution
+useEffect(() => {
+  // Skip if no execution in progress
+  if (!metadata?.executionId || !metadata?.port || metadata?.executionStatus !== 'running') return;
 
-    let isMounted = true;
-    let statusCheckInterval;
+  let isMounted = true;
+  let statusCheckInterval;
 
-    const checkNodeStatus = async () => {
+  const checkNodeStatus = async () => {
+    try {
+      // Check node status endpoint
+      const response = await fetch(
+        `http://localhost:${metadata.port}/node-status/${metadata.executionId}`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      
+      if (!response.ok || !isMounted) return;
+      
+      const data = await response.json();
+      
+      // Update node status in metadata if available
+      if (data.node_status && Object.keys(data.node_status).length > 0) {
+        // Update our local ref
+        nodeStatusRef.current = {
+          ...nodeStatusRef.current,
+          ...data.node_status
+        };
+        
+        // Update nodes with status information - not storing results directly
+        setNodes(currentNodes => 
+          currentNodes.map(node => ({
+            ...node,
+            data: {
+              ...node.data,
+              status: data.node_status[node.id] || node.data.status,
+              // Pass function to get results instead of storing directly
+              getNodeResult: () => nodeResultsRef.current[node.id]
+            }
+          }))
+        );
+        
+        // Update the last status update time
+        setLastStatusUpdate(new Date());
+        
+        // Also update metadata if provided
+        if (setMetadata) {
+          setMetadata(prev => ({
+            ...prev,
+            nodeStatus: {
+              ...(prev.nodeStatus || {}),
+              ...data.node_status
+            }
+          }));
+        }
+        
+        console.log('Updated node status from API:', Object.keys(data.node_status).length, 'nodes');
+      }
+      
+      // Also check for node results - new endpoint to get real-time results
       try {
-        // Check node status endpoint
-        const response = await fetch(
-          `http://localhost:${metadata.port}/node-status/${metadata.executionId}`,
+        const resultsResponse = await fetch(
+          `http://localhost:${metadata.port}/node-results/${metadata.executionId}`,
           { signal: AbortSignal.timeout(3000) }
         );
         
-        if (!response.ok || !isMounted) return;
-        
-        const data = await response.json();
-        
-        // Update node status in metadata if available
-        if (data.node_status && Object.keys(data.node_status).length > 0) {
-          // Update our local ref
-          nodeStatusRef.current = {
-            ...nodeStatusRef.current,
-            ...data.node_status
-          };
+        if (resultsResponse.ok && isMounted) {
+          const resultsData = await resultsResponse.json();
           
-          // Update nodes directly
-          setNodes(currentNodes => 
-            currentNodes.map(node => ({
-              ...node,
-              data: {
-                ...node.data,
-                status: data.node_status[node.id] || node.data.status
-              }
-            }))
-          );
-          
-          // Update the last status update time
-          setLastStatusUpdate(new Date());
-          
-          // Also update metadata if provided
-          if (setMetadata) {
-            setMetadata(prev => ({
-              ...prev,
-              nodeStatus: {
-                ...(prev.nodeStatus || {}),
-                ...data.node_status
-              }
-            }));
-          }
-          
-          console.log('Updated node status from API:', Object.keys(data.node_status).length, 'nodes');
-        }
-        
-        // Also check for node results - new endpoint to get real-time results
-        try {
-          const resultsResponse = await fetch(
-            `http://localhost:${metadata.port}/node-results/${metadata.executionId}`,
-            { signal: AbortSignal.timeout(3000) }
-          );
-          
-          if (resultsResponse.ok && isMounted) {
-            const resultsData = await resultsResponse.json();
+          if (resultsData.results && Object.keys(resultsData.results).length > 0) {
+            // Update our local ref - this is where results are stored
+            nodeResultsRef.current = {
+              ...nodeResultsRef.current,
+              ...resultsData.results
+            };
             
-            if (resultsData.results && Object.keys(resultsData.results).length > 0) {
-              // Update our local ref
-              nodeResultsRef.current = {
-                ...nodeResultsRef.current,
-                ...resultsData.results
-              };
-              
-              // Update nodes with the results
-              setNodes(currentNodes => 
-                currentNodes.map(node => ({
-                  ...node,
-                  data: {
-                    ...node.data,
-                    result: resultsData.results[node.id] || node.data.result
+            // Update nodes to provide access to results, but don't store directly
+            setNodes(currentNodes => 
+              currentNodes.map(node => ({
+                ...node,
+                data: {
+                  ...node.data,
+                  // Ensure getNodeResult function stays updated
+                  getNodeResult: () => nodeResultsRef.current[node.id]
+                }
+              }))
+            );
+            
+            // Also update metadata if provided
+            if (setMetadata) {
+              setMetadata(prev => ({
+                ...prev,
+                executionResult: {
+                  ...(prev.executionResult || {}),
+                  results: {
+                    ...(prev.executionResult?.results || {}),
+                    ...resultsData.results
                   }
-                }))
-              );
-              
-              // Also update metadata if provided
-              if (setMetadata) {
-                setMetadata(prev => ({
-                  ...prev,
-                  executionResult: {
-                    ...(prev.executionResult || {}),
-                    results: {
-                      ...(prev.executionResult?.results || {}),
-                      ...resultsData.results
-                    }
-                  }
-                }));
-              }
-              
-              console.log('Updated node results from API:', Object.keys(resultsData.results).length, 'nodes');
+                }
+              }));
             }
+            
+            console.log('Updated node results from API:', Object.keys(resultsData.results).length, 'nodes');
           }
-        } catch (resultError) {
-          // Silently handle result check errors
-          console.debug('Node results check error:', resultError);
         }
-      } catch (error) {
-        // Silently handle status check errors
-        console.debug('Node status check error:', error);
+      } catch (resultError) {
+        // Silently handle result check errors
+        console.debug('Node results check error:', resultError);
       }
-    };
+    } catch (error) {
+      // Silently handle status check errors
+      console.debug('Node status check error:', error);
+    }
+  };
+  
+  // Immediately check once
+  checkNodeStatus();
+  
+  // Then set up interval for continuous updates
+  statusCheckInterval = setInterval(checkNodeStatus, 2000);
+  
+  return () => {
+    isMounted = false;
+    if (statusCheckInterval) clearInterval(statusCheckInterval);
+  };
+}, [metadata?.executionId, metadata?.port, metadata?.executionStatus, setMetadata, setNodes]);
+
+// Parse execution outputs for node status information and results
+useEffect(() => {
+  if (!metadata?.outputs || metadata.outputs.length === 0) return;
+  
+  // Look for any execution outputs in metadata
+  const executionOutputs = metadata.outputs.filter(output => 
+    output.contents.some(content => 
+      typeof content.value === 'string' && (
+        content.value.includes('Execution completed:') || 
+        content.value.includes('Execution failed:') ||
+        content.value.includes('Execution progress:')
+      )
+    )
+  );
+  
+  if (executionOutputs.length > 0) {
+    // Get the latest execution output
+    const latestOutput = executionOutputs[executionOutputs.length - 1];
     
-    // Immediately check once
-    checkNodeStatus();
-    
-    // Then set up interval for continuous updates
-    statusCheckInterval = setInterval(checkNodeStatus, 2000);
-    
-    return () => {
-      isMounted = false;
-      if (statusCheckInterval) clearInterval(statusCheckInterval);
-    };
-    }, [metadata?.executionId, metadata?.port, metadata?.executionStatus, setMetadata, setNodes]);
-    
-    // Parse execution outputs for node status information and results
-    useEffect(() => {
-    if (!metadata?.outputs || metadata.outputs.length === 0) return;
-    
-    // Look for any execution outputs in metadata
-    const executionOutputs = metadata.outputs.filter(output => 
-      output.contents.some(content => 
+    try {
+      // Find the content with execution data
+      const resultContent = latestOutput.contents.find(content => 
         typeof content.value === 'string' && (
           content.value.includes('Execution completed:') || 
           content.value.includes('Execution failed:') ||
           content.value.includes('Execution progress:')
         )
-      )
-    );
-    
-    if (executionOutputs.length > 0) {
-      // Get the latest execution output
-      const latestOutput = executionOutputs[executionOutputs.length - 1];
+      );
       
-      try {
-        // Find the content with execution data
-        const resultContent = latestOutput.contents.find(content => 
-          typeof content.value === 'string' && (
-            content.value.includes('Execution completed:') || 
-            content.value.includes('Execution failed:') ||
-            content.value.includes('Execution progress:')
-          )
-        );
-        
-        if (resultContent && typeof resultContent.value === 'string') {
-          // Extract JSON from the content
-          const jsonStart = resultContent.value.indexOf('{');
-          if (jsonStart !== -1) {
-            const jsonString = resultContent.value.substring(jsonStart);
-            const executionResult = JSON.parse(jsonString);
+      if (resultContent && typeof resultContent.value === 'string') {
+        // Extract JSON from the content
+        const jsonStart = resultContent.value.indexOf('{');
+        if (jsonStart !== -1) {
+          const jsonString = resultContent.value.substring(jsonStart);
+          const executionResult = JSON.parse(jsonString);
+          
+          // Update node statuses if available
+          if (executionResult.result && executionResult.result.node_status) {
+            // Update our local ref
+            nodeStatusRef.current = {
+              ...nodeStatusRef.current,
+              ...executionResult.result.node_status
+            };
             
-            // Update node statuses if available
-            if (executionResult.result && executionResult.result.node_status) {
-              // Update our local ref
-              nodeStatusRef.current = {
-                ...nodeStatusRef.current,
-                ...executionResult.result.node_status
-              };
-              
-              // Update nodes directly
-              setNodes(currentNodes => 
-                currentNodes.map(node => ({
-                  ...node,
-                  data: {
-                    ...node.data,
-                    status: executionResult.result.node_status[node.id] || node.data.status
-                  }
-                }))
-              );
-              
-              // Update the last status update time
-              setLastStatusUpdate(new Date());
-              
-              // Update metadata if setMetadata is provided
-              if (setMetadata) {
-                setMetadata(prev => ({
-                  ...prev,
-                  nodeStatus: {
-                    ...(prev.nodeStatus || {}),
-                    ...executionResult.result.node_status
-                  },
-                  executionResult: executionResult.result // Store the full result
-                }));
-              }
+            // Update nodes with status but not results directly
+            setNodes(currentNodes => 
+              currentNodes.map(node => ({
+                ...node,
+                data: {
+                  ...node.data,
+                  status: executionResult.result.node_status[node.id] || node.data.status,
+                  // Provide function to get results
+                  getNodeResult: () => nodeResultsRef.current[node.id]
+                }
+              }))
+            );
+            
+            // Update the last status update time
+            setLastStatusUpdate(new Date());
+            
+            // Update metadata if setMetadata is provided
+            if (setMetadata) {
+              setMetadata(prev => ({
+                ...prev,
+                nodeStatus: {
+                  ...(prev.nodeStatus || {}),
+                  ...executionResult.result.node_status
+                },
+                executionResult: executionResult.result // Store the full result
+              }));
             }
+          }
+          
+          // Handle node results - store in ref, not in node data directly
+          if (executionResult.result && executionResult.result.results) {
+            // Update our local ref
+            nodeResultsRef.current = {
+              ...nodeResultsRef.current,
+              ...executionResult.result.results
+            };
             
-            // Handle node results - key addition to pass results to nodes
-            if (executionResult.result && executionResult.result.results) {
-              // Update our local ref
-              nodeResultsRef.current = {
-                ...nodeResultsRef.current,
-                ...executionResult.result.results
-              };
-              
-              // Update nodes with the results data
-              setNodes(currentNodes => 
-                currentNodes.map(node => ({
-                  ...node,
-                  data: {
-                    ...node.data,
-                    result: executionResult.result.results[node.id] || 
-                            nodeResultsRef.current[node.id] || 
-                            node.data.result
-                  }
-                }))
-              );
-              
-              console.log('Updated nodes with execution results:', 
-                Object.keys(executionResult.result.results).length, 'nodes');
-            }
+            // Update nodes to provide access to results, but don't store directly
+            setNodes(currentNodes => 
+              currentNodes.map(node => ({
+                ...node,
+                data: {
+                  ...node.data,
+                  // Ensure getNodeResult function stays updated
+                  getNodeResult: () => nodeResultsRef.current[node.id]
+                }
+              }))
+            );
             
-            // Also handle in-progress status updates
-            if (executionResult.progress && executionResult.progress.node_status) {
-              // Update our local ref
-              nodeStatusRef.current = {
-                ...nodeStatusRef.current,
-                ...executionResult.progress.node_status
-              };
-              
-              // Update nodes directly
-              setNodes(currentNodes => 
-                currentNodes.map(node => ({
-                  ...node,
-                  data: {
-                    ...node.data,
-                    status: executionResult.progress.node_status[node.id] || node.data.status
-                  }
-                }))
-              );
-              
-              // Update metadata if setMetadata is provided
-              if (setMetadata) {
-                setMetadata(prev => ({
-                  ...prev,
-                  nodeStatus: {
-                    ...(prev.nodeStatus || {}),
-                    ...executionResult.progress.node_status
-                  }
-                }));
-              }
+            console.log('Updated nodes to access execution results:', 
+              Object.keys(executionResult.result.results).length, 'nodes');
+          }
+          
+          // Also handle in-progress status updates
+          if (executionResult.progress && executionResult.progress.node_status) {
+            // Update our local ref
+            nodeStatusRef.current = {
+              ...nodeStatusRef.current,
+              ...executionResult.progress.node_status
+            };
+            
+            // Update nodes with status information only
+            setNodes(currentNodes => 
+              currentNodes.map(node => ({
+                ...node,
+                data: {
+                  ...node.data,
+                  status: executionResult.progress.node_status[node.id] || node.data.status,
+                  // Ensure getNodeResult function stays updated
+                  getNodeResult: () => nodeResultsRef.current[node.id]
+                }
+              }))
+            );
+            
+            // Update metadata if setMetadata is provided
+            if (setMetadata) {
+              setMetadata(prev => ({
+                ...prev,
+                nodeStatus: {
+                  ...(prev.nodeStatus || {}),
+                  ...executionResult.progress.node_status
+                }
+              }));
             }
           }
         }
-      } catch (error) {
-        console.error('Error parsing execution result:', error);
-        // Silently handle error, but log it for debugging
       }
-    }
-    }, [metadata?.outputs, setMetadata, setNodes]);
-    
-    // Initialize flow from initialLayout or content
-    useEffect(() => {
-    // If we have initialLayout, use that first
-    if (initialLayout && initialLayout.nodes && initialLayout.nodes.length > 0) {
-      console.log("Initializing flow from stored layout:", initialLayout);
-      
-      setNodes(initialLayout.nodes);
-      setEdges(initialLayout.edges);
-      
-      // Update previousNodesRef for consistency
-      initialLayout.nodes.forEach(node => {
-        previousNodesRef.current[node.id] = {
-          id: node.id,
-          label: node.data.label || node.id,
-          position_x: node.position.x,
-          position_y: node.position.y,
-          type: node.data.type || 'process',
-          _originalProperties: ['id', 'label', 'position_x', 'position_y', 'type']
-        };
-      });
-      
-      // Reset unsaved changes flag since we just loaded
-      setHasUnsavedChanges(false);
-      return;
-    }
-    
-    // Otherwise parse from content
-    if (!content || content === previousContentRef.current) return;
-    console.log("Initializing flow from content:", content.substring(0, 100) + "...");
-    previousContentRef.current = content;
-    
-    try {
-      // Parse the content and store it for reference
-      const workflow = parseIncrementalContent(content, previousNodesRef.current);
-      previousNodesRef.current = workflow.nodes;
-      
-      // Store original parsed sections for later reference when saving
-      originalSectionsRef.current = workflow;
-      
-      const flowNodes = Object.entries(workflow.nodes).map(([id, node]: [string, any]): Node => ({
-        id,
-        type: 'baseNode',
-        position: { 
-          x: typeof node.position_x === 'number' ? node.position_x : 0, 
-          y: typeof node.position_y === 'number' ? node.position_y : 0 
-        },
-        data: { 
-          // First, include ALL node properties in data
-          ...node,
-          // Then add node status information if available
-          status: metadata?.nodeStatus?.[id] || nodeStatusRef.current[id],
-          // Add node results if available
-          result: metadata?.executionResult?.results?.[id] || nodeResultsRef.current[id],
-          // Override specific properties that need special handling
-          label: node.label || id,
-          nodeKind: determineNodeKind({id, ...node}, workflow),
-          type: node.type || 'process',
-          // Include these property lists for structure preservation
-          _originalProperties: node._originalProperties || [],
-          _originalStructure: node._originalStructure || null
-        }
-      }));
-    
-      const flowEdges = workflow.edges.map((edge: any, index: number): Edge => ({
-        id: `e${index}`,
-        source: edge.source,
-        target: edge.target,
-        type: 'custom',
-        data: {
-          isBackward: parseInt(edge.target.split('-')[1] || '0') < 
-                    parseInt(edge.source.split('-')[1] || '0')
-        }
-      }));
-    
-      console.log("Setting flow data:", { nodes: flowNodes.length, edges: flowEdges.length });
-      setNodes(flowNodes);
-      setEdges(flowEdges);
-    
-      // Fit view if instance exists
-      if (reactFlowInstance) {
-        setTimeout(() => {
-          reactFlowInstance.fitView({
-            padding: 0.4,
-            minZoom: 0.1,
-            maxZoom: 2,
-            duration: 300
-          });
-        }, 100);
-      }
-      
-      // Reset unsaved changes flag since we just loaded
-      setHasUnsavedChanges(false);
     } catch (error) {
-      console.error('Failed to parse ACT content:', error);
-      toast.error('Failed to parse workflow content');
+      console.error('Error parsing execution result:', error);
+      // Silently handle error, but log it for debugging
     }
-    }, [content, initialLayout, setNodes, setEdges, reactFlowInstance, metadata?.nodeStatus, metadata?.executionResult?.results]);
+  }
+}, [metadata?.outputs, setMetadata, setNodes]);
+
+// Initialize flow from initialLayout or content
+useEffect(() => {
+  // If we have initialLayout, use that first
+  if (initialLayout && initialLayout.nodes && initialLayout.nodes.length > 0) {
+    console.log("Initializing flow from stored layout:", initialLayout);
     
-    const nodeTypes = useMemo<NodeTypes>(() => ({
-    baseNode: (props: any) => (
-      <BaseNode
-        {...props}
-        icon={<Box />}
-        onNodeDataChange={handleNodeDataChange}
-        onNodeDelete={handleNodeDelete}
+    // Process nodes to ensure no results are stored directly in node data
+    const processedNodes = initialLayout.nodes.map(node => ({
+      ...node,
+      data: {
+        ...Object.entries(node.data)
+          .filter(([key]) => !EXECUTION_PROPERTIES.includes(key))
+          .reduce((obj, [key, val]) => ({ ...obj, [key]: val }), {}),
+        // Add function to get node result
+        getNodeResult: () => nodeResultsRef.current[node.id] || 
+                           metadata?.executionResult?.results?.[node.id]
+      }
+    }));
+    
+    setNodes(processedNodes);
+    setEdges(initialLayout.edges);
+    
+    // Update previousNodesRef for consistency - without result data
+    initialLayout.nodes.forEach(node => {
+      const { result, executionResponse, status, ...filteredData } = node.data;
+      
+      previousNodesRef.current[node.id] = {
+        id: node.id,
+        label: filteredData.label || node.id,
+        position_x: node.position.x,
+        position_y: node.position.y,
+        type: filteredData.type || 'process',
+        ...filteredData,
+        _originalProperties: ['id', 'label', 'position_x', 'position_y', 'type']
+          .concat(Object.keys(filteredData)
+            .filter(key => !['id', 'label', 'position_x', 'position_y', 'type'].includes(key) && 
+                    !EXECUTION_PROPERTIES.includes(key)))
+      };
+    });
+    
+    // Reset unsaved changes flag since we just loaded
+    setHasUnsavedChanges(false);
+    return;
+  }
+  
+  // Otherwise parse from content
+  if (!content || content === previousContentRef.current) return;
+  console.log("Initializing flow from content:", content.substring(0, 100) + "...");
+  previousContentRef.current = content;
+  
+  try {
+    // Parse the content and store it for reference
+    const workflow = parseIncrementalContent(content, previousNodesRef.current);
+    previousNodesRef.current = workflow.nodes;
+    
+    // Store original parsed sections for later reference when saving
+    originalSectionsRef.current = workflow;
+    
+    const flowNodes = Object.entries(workflow.nodes).map(([id, node]: [string, any]): Node => ({
+      id,
+      type: 'baseNode',
+      position: { 
+        x: typeof node.position_x === 'number' ? node.position_x : 0, 
+        y: typeof node.position_y === 'number' ? node.position_y : 0 
+      },
+      data: { 
+        // Include all node properties except execution data
+        ...Object.entries(node)
+          .filter(([key]) => !EXECUTION_PROPERTIES.includes(key) && !key.startsWith('_'))
+          .reduce((obj, [key, val]) => ({ ...obj, [key]: val }), {}),
+        // Add function to get node result rather than storing directly
+        getNodeResult: () => nodeResultsRef.current[id] || metadata?.executionResult?.results?.[id],
+        // Add status information separately
+        status: metadata?.nodeStatus?.[id] || nodeStatusRef.current[id],
+        // Override specific properties that need special handling
+        label: node.label || id,
+        nodeKind: determineNodeKind({id, ...node}, workflow),
+        type: node.type || 'process',
+        // Include these property lists for structure preservation
+        _originalProperties: (node._originalProperties || [])
+          .filter(prop => !EXECUTION_PROPERTIES.includes(prop)),
+        _originalStructure: node._originalStructure || null
+      }
+    }));
+  
+    const flowEdges = workflow.edges.map((edge: any, index: number): Edge => ({
+      id: `e${index}`,
+      source: edge.source,
+      target: edge.target,
+      type: 'custom',
+      data: {
+        isBackward: parseInt(edge.target.split('-')[1] || '0') < 
+                  parseInt(edge.source.split('-')[1] || '0')
+      }
+    }));
+  
+    console.log("Setting flow data:", { nodes: flowNodes.length, edges: flowEdges.length });
+    setNodes(flowNodes);
+    setEdges(flowEdges);
+  
+    // Fit view if instance exists
+    if (reactFlowInstance) {
+      setTimeout(() => {
+        reactFlowInstance.fitView({
+          padding: 0.4,
+          minZoom: 0.1,
+          maxZoom: 2,
+          duration: 300
+        });
+      }, 100);
+    }
+    
+    // Reset unsaved changes flag since we just loaded
+    setHasUnsavedChanges(false);
+  } catch (error) {
+    console.error('Failed to parse ACT content:', error);
+    toast.error('Failed to parse workflow content');
+  }
+}, [content, initialLayout, setNodes, setEdges, reactFlowInstance, metadata?.nodeStatus, metadata?.executionResult?.results]);
+
+const nodeTypes = useMemo<NodeTypes>(() => ({
+  baseNode: (props: any) => (
+    <BaseNode
+      {...props}
+      icon={<Box />}
+      onNodeDataChange={handleNodeDataChange}
+      onNodeDelete={handleNodeDelete}
+      // Pass the function to get node result
+      getNodeResult={() => nodeResultsRef.current[props.id] || 
+                        metadata?.executionResult?.results?.[props.id]}
+    />
+  ),
+}), [handleNodeDataChange, handleNodeDelete, metadata?.executionResult?.results]);
+
+// Memoize edge types
+const edgeTypes = useMemo<EdgeTypes>(() => ({
+  custom: CustomEdge,
+}), []);
+
+return (
+  <div className="w-full h-full relative">
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={handleNodesChange}
+      onEdgesChange={handleEdgesChange}
+      onConnect={onConnect}
+      onInit={setReactFlowInstance}
+      nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      minZoom={0.1}
+      maxZoom={2}
+      defaultViewport={defaultViewport}
+      fitView
+      fitViewOptions={{
+        padding: 0.5,
+        minZoom: 0.5,
+        maxZoom: 2
+      }}
+      panOnDrag={true}
+      snapToGrid={true}
+      snapGrid={[15, 15]}
+    >
+      <Background
+        color="#5b5b5b"
+        gap={20}
+        style={{ backgroundColor: '#09090b' }}
       />
-    ),
-    }), [handleNodeDataChange, handleNodeDelete]);
-    
-    // Memoize edge types
-    const edgeTypes = useMemo<EdgeTypes>(() => ({
-    custom: CustomEdge,
-    }), []);
-    
-    return (
-    <div className="w-full h-full relative">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={handleNodesChange}
-        onEdgesChange={handleEdgesChange}
-        onConnect={onConnect}
-        onInit={setReactFlowInstance}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        minZoom={0.1}
-        maxZoom={2}
-        defaultViewport={defaultViewport}
-        fitView
-        fitViewOptions={{
-          padding: 0.5,
-          minZoom: 0.5,
-          maxZoom: 2
-        }}
-        panOnDrag={true}
-        snapToGrid={true}
-        snapGrid={[15, 15]}
-      >
-        <Background
-          color="#5b5b5b"
-          gap={20}
-          style={{ backgroundColor: '#09090b' }}
-        />
-        <Controls />
-        <MiniMap 
-          zoomable 
-          pannable
-          nodeColor={node => {
-            // First check if we have status info for this node
-            const nodeStatusInfo = node.data?.status || 
-                                  (metadata?.nodeStatus && metadata.nodeStatus[node.id]) ||
-                                  (nodeStatusRef.current && nodeStatusRef.current[node.id]);
-            
-            if (nodeStatusInfo) {
-              // Use status-based coloring with more granular states
-              const status = typeof nodeStatusInfo === 'string' ? nodeStatusInfo : nodeStatusInfo.status;
-              
-              switch (status) {
-                case 'completed':
-                  return '#86efac'; // Green for completed
-                case 'failed':
-                  return '#f87171'; // Red for failed
-                case 'pending':
-                  return '#93c5fd'; // Light blue for pending
-                case 'in_progress':
-                  return '#fcd34d'; // Yellow for in progress
-                case 'waiting':
-                  return '#cbd5e1'; // Slate for waiting
-                case 'skipped':
-                  return '#a3a3a3'; // Gray for skipped
-                default:
-                  return '#e5e7eb'; // Default gray
-              }
-            }
-            
-            // Fall back to kind-based coloring
-            switch (node.data?.nodeKind) {
-              case 'Input': return '#93c5fd';
-              case 'Output': return '#86efac';
-              case 'Core': return '#c084fc';
-              default: return '#e5e7eb';
-            }
-          }}
-        />
-        
-        <Panel position="top-right" className="z-10">
-          {status === 'updating' && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1 rounded-md text-sm flex items-center">
-              <span>Saving changes...</span>
-            </div>
-          )}
+      <Controls />
+      <MiniMap 
+        zoomable 
+        pannable
+        nodeColor={node => {
+          // First check if we have status info for this node
+          const nodeStatusInfo = node.data?.status || 
+                                (metadata?.nodeStatus && metadata.nodeStatus[node.id]) ||
+                                (nodeStatusRef.current && nodeStatusRef.current[node.id]);
           
-          {status === 'error' && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-1 rounded-md text-sm flex items-center">
-              <span>Error saving changes</span>
-            </div>
-          )}
+          if (nodeStatusInfo) {
+            // Use status-based coloring with more granular states
+            const status = typeof nodeStatusInfo === 'string' ? nodeStatusInfo : nodeStatusInfo.status;
+            
+            switch (status) {
+              case 'completed':
+                return '#86efac'; // Green for completed
+              case 'failed':
+                return '#f87171'; // Red for failed
+              case 'pending':
+                return '#93c5fd'; // Light blue for pending
+              case 'in_progress':
+                return '#fcd34d'; // Yellow for in progress
+              case 'waiting':
+                return '#cbd5e1'; // Slate for waiting
+              case 'skipped':
+                return '#a3a3a3'; // Gray for skipped
+              default:
+                return '#e5e7eb'; // Default gray
+            }
+          }
+          
+          // Fall back to kind-based coloring
+          switch (node.data?.nodeKind) {
+            case 'Input': return '#93c5fd';
+            case 'Output': return '#86efac';
+            case 'Core': return '#c084fc';
+            default: return '#e5e7eb';
+          }
+        }}
+      />
+      
+      <Panel position="top-right" className="z-10">
+        {status === 'updating' && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1 rounded-md text-sm flex items-center">
+            <span>Saving changes...</span>
+          </div>
+        )}
+        
+        {status === 'error' && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-1 rounded-md text-sm flex items-center">
+            <span>Error saving changes</span>
+          </div>
+        )}
+  
+        {metadata?.executionStatus === 'running' && (
+          <div className="bg-blue-50 border border-blue-200 text-blue-700 px-3 py-1 rounded-md text-sm flex items-center mt-2">
+            <span>Execution in progress...</span>
+          </div>
+        )}
+      </Panel>
+    </ReactFlow>
     
-          {metadata?.executionStatus === 'running' && (
-            <div className="bg-blue-50 border border-blue-200 text-blue-700 px-3 py-1 rounded-md text-sm flex items-center mt-2">
-              <span>Execution in progress...</span>
-            </div>
-          )}
-        </Panel>
-      </ReactFlow>
-      
-      {/* Action buttons */}
-      <div className="absolute bottom-4 right-4 flex gap-2 z-10">
-        <Button 
-          onClick={onAddNode}
-          className="bg-blue-600 hover:bg-blue-700"
-        >
-          Add Node
-        </Button>
-        <Button 
-          onClick={() => saveFlowToContent(false)} // explicit save, not debounced
-          className="bg-green-600 hover:bg-green-700 flex items-center gap-1"
-          disabled={!hasUnsavedChanges || savingNodesRef.current || status === 'updating'}
-        >
-          <Save size={16} />
-          Save Flow
-        </Button>
+    {/* Action buttons */}
+    <div className="absolute bottom-4 right-4 flex gap-2 z-10">
+      <Button 
+        onClick={onAddNode}
+        className="bg-blue-600 hover:bg-blue-700"
+      >
+        Add Node
+      </Button>
+      <Button 
+        onClick={() => saveFlowToContent(false)} // explicit save, not debounced
+        className="bg-green-600 hover:bg-green-700 flex items-center gap-1"
+        disabled={!hasUnsavedChanges || savingNodesRef.current || status === 'updating'}
+      >
+        <Save size={16} />
+        Save Flow
+      </Button>
+    </div>
+    
+    {/* Debug info panel */}
+    <div className="absolute top-4 left-4 bg-black bg-opacity-80 text-white text-xs p-2 rounded z-20">
+      <div>Nodes: {nodes.length} | Edges: {edges.length}</div>
+      <div>Has unsaved changes: {hasUnsavedChanges ? 'Yes' : 'No'}</div>
+      <div>Status: {status}</div>
+      <div>Execution: {metadata?.executionStatus || 'none'}</div>
+      {lastSavedTime && <div>Last saved: {lastSavedTime.toLocaleTimeString()}</div>}
+      {lastStatusUpdate && <div>Last status update: {lastStatusUpdate.toLocaleTimeString()}</div>}
+      <div>Nodes with results: {Object.keys(nodeResultsRef.current).length}</div>
+    </div>
+    
+    {/* Unsaved changes indicator */}
+    {hasUnsavedChanges && status !== 'updating' && (
+      <div className="absolute top-4 right-4 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1 rounded-md text-sm flex items-center z-10">
+        <span>Unsaved changes</span>
       </div>
-      
-      {/* Debug info panel */}
-      <div className="absolute top-4 left-4 bg-black bg-opacity-80 text-white text-xs p-2 rounded z-20">
-        <div>Nodes: {nodes.length} | Edges: {edges.length}</div>
-        <div>Has unsaved changes: {hasUnsavedChanges ? 'Yes' : 'No'}</div>
-        <div>Status: {status}</div>
-        <div>Execution: {metadata?.executionStatus || 'none'}</div>
-        {lastSavedTime && <div>Last saved: {lastSavedTime.toLocaleTimeString()}</div>}
-        {lastStatusUpdate && <div>Last status update: {lastStatusUpdate.toLocaleTimeString()}</div>}
-        <div>Nodes with results: {Object.keys(nodeResultsRef.current).length}</div>
-      </div>
-      
-      {/* Unsaved changes indicator */}
-      {hasUnsavedChanges && status !== 'updating' && (
-        <div className="absolute top-4 right-4 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1 rounded-md text-sm flex items-center z-10">
-          <span>Unsaved changes</span>
-        </div>
-      )}
-      
-      {/* Enhanced Status Legend with more states */}
-      {(metadata?.nodeStatus && Object.keys(metadata.nodeStatus).length > 0) || 
-       (nodeStatusRef.current && Object.keys(nodeStatusRef.current).length > 0) ? (
-        <div className="absolute bottom-4 left-4 bg-white border border-slate-200 rounded-md shadow-sm p-2 z-10">
-          <div className="text-xs font-semibold mb-1">Node Status</div>
-          <div className="space-y-1">
-            <div className="flex items-center gap-1 text-xs">
-              <div className="w-3 h-3 rounded-full bg-green-400"></div>
-              <span>Completed</span>
-            </div>
-            <div className="flex items-center gap-1 text-xs">
-              <div className="w-3 h-3 rounded-full bg-red-400"></div>
-              <span>Failed</span>
-            </div>
-            <div className="flex items-center gap-1 text-xs">
-              <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
-              <span>In Progress</span>
-            </div>
-            <div className="flex items-center gap-1 text-xs">
-              <div className="w-3 h-3 rounded-full bg-blue-400"></div>
-              <span>Pending</span>
-            </div>
-            <div className="flex items-center gap-1 text-xs">
-              <div className="w-3 h-3 rounded-full bg-slate-400"></div>
-              <span>Waiting</span>
-            </div>
-            <div className="flex items-center gap-1 text-xs">
-              <div className="w-3 h-3 rounded-full bg-gray-400"></div>
-              <span>Skipped</span>
-            </div>
+    )}
+    
+    {/* Enhanced Status Legend with more states */}
+    {(metadata?.nodeStatus && Object.keys(metadata.nodeStatus).length > 0) || 
+     (nodeStatusRef.current && Object.keys(nodeStatusRef.current).length > 0) ? (
+      <div className="absolute bottom-4 left-4 bg-white border border-slate-200 rounded-md shadow-sm p-2 z-10">
+        <div className="text-xs font-semibold mb-1">Node Status</div>
+        <div className="space-y-1">
+          <div className="flex items-center gap-1 text-xs">
+            <div className="w-3 h-3 rounded-full bg-green-400"></div>
+            <span>Completed</span>
+          </div>
+          <div className="flex items-center gap-1 text-xs">
+            <div className="w-3 h-3 rounded-full bg-red-400"></div>
+            <span>Failed</span>
+          </div>
+          <div className="flex items-center gap-1 text-xs">
+            <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+            <span>In Progress</span>
+          </div>
+          <div className="flex items-center gap-1 text-xs">
+            <div className="w-3 h-3 rounded-full bg-blue-400"></div>
+            <span>Pending</span>
+          </div>
+          <div className="flex items-center gap-1 text-xs">
+            <div className="w-3 h-3 rounded-full bg-slate-400"></div>
+            <span>Waiting</span>
+          </div>
+          <div className="flex items-center gap-1 text-xs">
+            <div className="w-3 h-3 rounded-full bg-gray-400"></div>
+            <span>Skipped</span>
           </div>
         </div>
-      ) : null}
-    </div>
-    );
-    };
-    
-    export default ActFlowVisualizer;
+      </div>
+    ) : null}
+  </div>
+);
+};
+
+export default ActFlowVisualizer;

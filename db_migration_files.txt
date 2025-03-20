@@ -1,0 +1,1024 @@
+import type { InferSelectModel } from 'drizzle-orm';
+import {
+  pgTable,
+  varchar,
+  timestamp,
+  json,
+  uuid,
+  text,
+  primaryKey,
+  foreignKey,
+  boolean,
+} from 'drizzle-orm/pg-core';
+
+export const user = pgTable('User', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  email: varchar('email', { length: 64 }).notNull(),
+  password: varchar('password', { length: 64 }),
+});
+
+export type User = InferSelectModel<typeof user>;
+
+export const chat = pgTable('Chat', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  createdAt: timestamp('createdAt').notNull(),
+  title: text('title').notNull(),
+  userId: uuid('userId')
+    .notNull()
+    .references(() => user.id),
+  visibility: varchar('visibility', { enum: ['public', 'private'] })
+    .notNull()
+    .default('private'),
+});
+
+export type Chat = InferSelectModel<typeof chat>;
+
+export const message = pgTable('Message', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  chatId: uuid('chatId')
+    .notNull()
+    .references(() => chat.id),
+  role: varchar('role').notNull(),
+  content: json('content').notNull(),
+  createdAt: timestamp('createdAt').notNull(),
+});
+
+export type Message = InferSelectModel<typeof message>;
+
+export const vote = pgTable(
+  'Vote',
+  {
+    chatId: uuid('chatId')
+      .notNull()
+      .references(() => chat.id),
+    messageId: uuid('messageId')
+      .notNull()
+      .references(() => message.id),
+    isUpvoted: boolean('isUpvoted').notNull(),
+  },
+  (table) => {
+    return {
+      pk: primaryKey({ columns: [table.chatId, table.messageId] }),
+    };
+  },
+);
+
+export type Vote = InferSelectModel<typeof vote>;
+
+export const document = pgTable(
+  'Document',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    createdAt: timestamp('createdAt').notNull(),
+    title: text('title').notNull(),
+    content: text('content'),
+    kind: varchar('text', { enum: ['text', 'code', 'image', 'sheet'] })
+      .notNull()
+      .default('text'),
+    userId: uuid('userId')
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => {
+    return {
+      pk: primaryKey({ columns: [table.id, table.createdAt] }),
+    };
+  },
+);
+
+export type Document = InferSelectModel<typeof document>;
+
+export const suggestion = pgTable(
+  'Suggestion',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    documentId: uuid('documentId').notNull(),
+    documentCreatedAt: timestamp('documentCreatedAt').notNull(),
+    originalText: text('originalText').notNull(),
+    suggestedText: text('suggestedText').notNull(),
+    description: text('description'),
+    isResolved: boolean('isResolved').notNull().default(false),
+    userId: uuid('userId')
+      .notNull()
+      .references(() => user.id),
+    createdAt: timestamp('createdAt').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.id] }),
+    documentRef: foreignKey({
+      columns: [table.documentId, table.documentCreatedAt],
+      foreignColumns: [document.id, document.createdAt],
+    }),
+  }),
+);
+
+export type Suggestion = InferSelectModel<typeof suggestion>;
+import 'server-only';
+
+import { genSaltSync, hashSync } from 'bcrypt-ts';
+import { and, asc, desc, eq, gt, gte, inArray } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+
+import {
+  user,
+  chat,
+  type User,
+  document,
+  type Suggestion,
+  suggestion,
+  type Message,
+  message,
+  vote,
+} from './schema';
+import { ArtifactKind } from '@/components/artifact';
+
+// Optionally, if not using email/pass login, you can
+// use the Drizzle adapter for Auth.js / NextAuth
+// https://authjs.dev/reference/adapter/drizzle
+
+// biome-ignore lint: Forbidden non-null assertion.
+const client = postgres(process.env.POSTGRES_URL!);
+const db = drizzle(client);
+
+export async function getUser(email: string): Promise<Array<User>> {
+  try {
+    return await db.select().from(user).where(eq(user.email, email));
+  } catch (error) {
+    console.error('Failed to get user from database');
+    throw error;
+  }
+}
+
+export async function createUser(email: string, password: string) {
+  const salt = genSaltSync(10);
+  const hash = hashSync(password, salt);
+
+  try {
+    return await db.insert(user).values({ email, password: hash });
+  } catch (error) {
+    console.error('Failed to create user in database');
+    throw error;
+  }
+}
+
+export async function saveChat({
+  id,
+  userId,
+  title,
+}: {
+  id: string;
+  userId: string;
+  title: string;
+}) {
+  try {
+    return await db.insert(chat).values({
+      id,
+      createdAt: new Date(),
+      userId,
+      title,
+    });
+  } catch (error) {
+    console.error('Failed to save chat in database');
+    throw error;
+  }
+}
+
+export async function deleteChatById({ id }: { id: string }) {
+  try {
+    await db.delete(vote).where(eq(vote.chatId, id));
+    await db.delete(message).where(eq(message.chatId, id));
+
+    return await db.delete(chat).where(eq(chat.id, id));
+  } catch (error) {
+    console.error('Failed to delete chat by id from database');
+    throw error;
+  }
+}
+
+export async function getChatsByUserId({ id }: { id: string }) {
+  try {
+    return await db
+      .select()
+      .from(chat)
+      .where(eq(chat.userId, id))
+      .orderBy(desc(chat.createdAt));
+  } catch (error) {
+    console.error('Failed to get chats by user from database');
+    throw error;
+  }
+}
+
+export async function getChatById({ id }: { id: string }) {
+  try {
+    const [selectedChat] = await db.select().from(chat).where(eq(chat.id, id));
+    return selectedChat;
+  } catch (error) {
+    console.error('Failed to get chat by id from database');
+    throw error;
+  }
+}
+
+export async function saveMessages({ messages }: { messages: Array<Message> }) {
+  try {
+    return await db.insert(message).values(messages);
+  } catch (error) {
+    console.error('Failed to save messages in database', error);
+    throw error;
+  }
+}
+
+export async function getMessagesByChatId({ id }: { id: string }) {
+  try {
+    return await db
+      .select()
+      .from(message)
+      .where(eq(message.chatId, id))
+      .orderBy(asc(message.createdAt));
+  } catch (error) {
+    console.error('Failed to get messages by chat id from database', error);
+    throw error;
+  }
+}
+
+export async function voteMessage({
+  chatId,
+  messageId,
+  type,
+}: {
+  chatId: string;
+  messageId: string;
+  type: 'up' | 'down';
+}) {
+  try {
+    const [existingVote] = await db
+      .select()
+      .from(vote)
+      .where(and(eq(vote.messageId, messageId)));
+
+    if (existingVote) {
+      return await db
+        .update(vote)
+        .set({ isUpvoted: type === 'up' })
+        .where(and(eq(vote.messageId, messageId), eq(vote.chatId, chatId)));
+    }
+    return await db.insert(vote).values({
+      chatId,
+      messageId,
+      isUpvoted: type === 'up',
+    });
+  } catch (error) {
+    console.error('Failed to upvote message in database', error);
+    throw error;
+  }
+}
+
+export async function getVotesByChatId({ id }: { id: string }) {
+  try {
+    return await db.select().from(vote).where(eq(vote.chatId, id));
+  } catch (error) {
+    console.error('Failed to get votes by chat id from database', error);
+    throw error;
+  }
+}
+
+export async function saveDocument({
+  id,
+  title,
+  kind,
+  content,
+  userId,
+}: {
+  id: string;
+  title: string;
+  kind: ArtifactKind;
+  content: string;
+  userId: string;
+}) {
+  try {
+    return await db.insert(document).values({
+      id,
+      title,
+      kind,
+      content,
+      userId,
+      createdAt: new Date(),
+    });
+  } catch (error) {
+    console.error('Failed to save document in database');
+    throw error;
+  }
+}
+
+export async function getDocumentsById({ id }: { id: string }) {
+  try {
+    const documents = await db
+      .select()
+      .from(document)
+      .where(eq(document.id, id))
+      .orderBy(asc(document.createdAt));
+
+    return documents;
+  } catch (error) {
+    console.error('Failed to get document by id from database');
+    throw error;
+  }
+}
+
+export async function getDocumentById({ id }: { id: string }) {
+  try {
+    const [selectedDocument] = await db
+      .select()
+      .from(document)
+      .where(eq(document.id, id))
+      .orderBy(desc(document.createdAt));
+
+    return selectedDocument;
+  } catch (error) {
+    console.error('Failed to get document by id from database');
+    throw error;
+  }
+}
+
+export async function deleteDocumentsByIdAfterTimestamp({
+  id,
+  timestamp,
+}: {
+  id: string;
+  timestamp: Date;
+}) {
+  try {
+    await db
+      .delete(suggestion)
+      .where(
+        and(
+          eq(suggestion.documentId, id),
+          gt(suggestion.documentCreatedAt, timestamp),
+        ),
+      );
+
+    return await db
+      .delete(document)
+      .where(and(eq(document.id, id), gt(document.createdAt, timestamp)));
+  } catch (error) {
+    console.error(
+      'Failed to delete documents by id after timestamp from database',
+    );
+    throw error;
+  }
+}
+
+export async function saveSuggestions({
+  suggestions,
+}: {
+  suggestions: Array<Suggestion>;
+}) {
+  try {
+    return await db.insert(suggestion).values(suggestions);
+  } catch (error) {
+    console.error('Failed to save suggestions in database');
+    throw error;
+  }
+}
+
+export async function getSuggestionsByDocumentId({
+  documentId,
+}: {
+  documentId: string;
+}) {
+  try {
+    return await db
+      .select()
+      .from(suggestion)
+      .where(and(eq(suggestion.documentId, documentId)));
+  } catch (error) {
+    console.error(
+      'Failed to get suggestions by document version from database',
+    );
+    throw error;
+  }
+}
+
+export async function getMessageById({ id }: { id: string }) {
+  try {
+    return await db.select().from(message).where(eq(message.id, id));
+  } catch (error) {
+    console.error('Failed to get message by id from database');
+    throw error;
+  }
+}
+
+export async function deleteMessagesByChatIdAfterTimestamp({
+  chatId,
+  timestamp,
+}: {
+  chatId: string;
+  timestamp: Date;
+}) {
+  try {
+    const messagesToDelete = await db
+      .select({ id: message.id })
+      .from(message)
+      .where(
+        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp)),
+      );
+
+    const messageIds = messagesToDelete.map((message) => message.id);
+
+    if (messageIds.length > 0) {
+      await db
+        .delete(vote)
+        .where(
+          and(eq(vote.chatId, chatId), inArray(vote.messageId, messageIds)),
+        );
+
+      return await db
+        .delete(message)
+        .where(
+          and(eq(message.chatId, chatId), inArray(message.id, messageIds)),
+        );
+    }
+  } catch (error) {
+    console.error(
+      'Failed to delete messages by id after timestamp from database',
+    );
+    throw error;
+  }
+}
+
+export async function updateChatVisiblityById({
+  chatId,
+  visibility,
+}: {
+  chatId: string;
+  visibility: 'private' | 'public';
+}) {
+  try {
+    return await db.update(chat).set({ visibility }).where(eq(chat.id, chatId));
+  } catch (error) {
+    console.error('Failed to update chat visibility in database');
+    throw error;
+  }
+}
+export async function updateDocumentInPlace({
+  id,
+  content,
+  userId,
+}: {
+  id: string;
+  content: string;
+  userId: string;
+}) {
+  try {
+    // Get the latest document version
+    const documents = await getDocumentsById({ id });
+    if (!documents.length) {
+      throw new Error("Document not found");
+    }
+    
+    // Get the most recent document
+    const latestDocument = documents[documents.length - 1];
+    
+    // Update only the content of the latest document
+    return await db
+      .update(document)
+      .set({ content })
+      .where(
+        and(
+          eq(document.id, id),
+          eq(document.createdAt, latestDocument.createdAt)
+        )
+      );
+  } catch (error) {
+    console.error('Failed to update document in place');
+    throw error;
+  }
+}import { config } from 'dotenv';
+import { defineConfig } from 'drizzle-kit';
+
+config({
+  path: '.env.local',
+});
+
+export default defineConfig({
+  schema: './lib/db/schema.ts',
+  out: './lib/db/migrations',
+  dialect: 'postgresql',
+  dbCredentials: {
+    // biome-ignore lint: Forbidden non-null assertion.
+    url: process.env.POSTGRES_URL!,
+  },
+});
+import { config } from 'dotenv';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
+import postgres from 'postgres';
+
+config({
+  path: '.env.local',
+});
+
+const runMigrate = async () => {
+  if (!process.env.POSTGRES_URL) {
+    throw new Error('POSTGRES_URL is not defined');
+  }
+
+  const connection = postgres(process.env.POSTGRES_URL, { max: 1 });
+  const db = drizzle(connection);
+
+  console.log('⏳ Running migrations...');
+
+  const start = Date.now();
+  await migrate(db, { migrationsFolder: './lib/db/migrations' });
+  const end = Date.now();
+
+  console.log('✅ Migrations completed in', end - start, 'ms');
+  process.exit(0);
+};
+
+runMigrate().catch((err) => {
+  console.error('❌ Migration failed');
+  console.error(err);
+  process.exit(1);
+});
+'use server';
+
+import { z } from 'zod';
+
+import { createUser, getUser } from '@/lib/db/neo4j-queries';
+
+import { signIn } from './auth';
+
+const authFormSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+});
+
+export interface LoginActionState {
+  status: 'idle' | 'in_progress' | 'success' | 'failed' | 'invalid_data';
+}
+
+export const login = async (
+  _: LoginActionState,
+  formData: FormData,
+): Promise<LoginActionState> => {
+  try {
+    const validatedData = authFormSchema.parse({
+      email: formData.get('email'),
+      password: formData.get('password'),
+    });
+
+    await signIn('credentials', {
+      email: validatedData.email,
+      password: validatedData.password,
+      redirect: false,
+    });
+
+    return { status: 'success' };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return { status: 'invalid_data' };
+    }
+
+    return { status: 'failed' };
+  }
+};
+
+export interface RegisterActionState {
+  status:
+    | 'idle'
+    | 'in_progress'
+    | 'success'
+    | 'failed'
+    | 'user_exists'
+    | 'invalid_data';
+}
+
+export const register = async (
+  _: RegisterActionState,
+  formData: FormData,
+): Promise<RegisterActionState> => {
+  try {
+    const validatedData = authFormSchema.parse({
+      email: formData.get('email'),
+      password: formData.get('password'),
+    });
+
+    const [user] = await getUser(validatedData.email);
+
+    if (user) {
+      return { status: 'user_exists' } as RegisterActionState;
+    }
+    await createUser(validatedData.email, validatedData.password);
+    await signIn('credentials', {
+      email: validatedData.email,
+      password: validatedData.password,
+      redirect: false,
+    });
+
+    return { status: 'success' };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return { status: 'invalid_data' };
+    }
+
+    return { status: 'failed' };
+  }
+};
+'use server';
+
+import { generateText, Message } from 'ai';
+import { cookies } from 'next/headers';
+import { 
+  deleteMessagesByChatIdAfterTimestamp,
+  getMessageById, 
+  updateChatVisiblityById 
+} from '@/lib/db/neo4j-queries';
+import { VisibilityType } from '@/components/visibility-selector';
+import { myProvider } from '@/lib/ai/models';
+
+// Define max token constant
+const MAX_TOKENS = 46096; // Adjust based on your model's requirements
+
+export async function saveChatModelAsCookie(model: string) {
+  const cookieStore = cookies();
+  cookieStore.set('chat-model', model, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: 30 * 24 * 60 * 60 // 30 days
+  });
+}
+
+export async function generateTitleFromUserMessage({
+  message,
+}: {
+  message: Message;
+}) {
+  try {
+    const { text: title } = await generateText({
+      model: myProvider.languageModel('title-model'),
+      system: `
+        You will generate a short title based on the first message a user begins a conversation with.
+        Ensure it is not more than 80 characters long.
+        The title should be a summary of the user's message.
+        Do not use quotes or colons.
+      `,
+      prompt: JSON.stringify(message),
+      maxTokens: MAX_TOKENS
+    });
+
+    return title.trim();
+  } catch (error) {
+    console.error('Error generating title:', error);
+    return 'New Conversation'; // Fallback title
+  }
+}
+
+export async function deleteTrailingMessages({ id }: { id: string }) {
+  try {
+    const messages = await getMessageById({ id });
+    
+    if (!messages || messages.length === 0) {
+      throw new Error('Message not found');
+    }
+
+    const message = messages[0];
+    
+    await deleteMessagesByChatIdAfterTimestamp({
+      chatId: message.chatId,
+      timestamp: message.createdAt,
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error deleting trailing messages:', error);
+    throw error;
+  }
+}
+
+export async function updateChatVisibility({
+  chatId,
+  visibility,
+}: {
+  chatId: string;
+  visibility: VisibilityType;
+}) {
+  try {
+    if (!chatId) {
+      throw new Error('Chat ID is required');
+    }
+
+    await updateChatVisiblityById({ chatId, visibility });
+    return { success: true };
+  } catch (error) {
+    console.error('Error updating chat visibility:', error);
+    throw error;
+  }
+}{
+  "name": "ai-chatbot",
+  "version": "0.1.0",
+  "private": true,
+  "proxy": "http://localhost:5001",
+  "scripts": {
+    "dev": "next dev --turbo",
+    "build": "tsx lib/db/migrate && next build",
+    "start": "next start",
+    "lint": "next lint && biome lint --write --unsafe",
+    "lint:fix": "next lint --fix && biome lint --write --unsafe",
+    "format": "biome format --write",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "npx tsx lib/db/migrate.ts",
+    "db:studio": "drizzle-kit studio",
+    "db:push": "drizzle-kit push",
+    "db:pull": "drizzle-kit pull",
+    "db:check": "drizzle-kit check",
+    "db:up": "drizzle-kit up"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^1.1.10",
+    "@ai-sdk/fireworks": "^0.1.8",
+    "@ai-sdk/google": "^1.1.17",
+    "@ai-sdk/google-vertex": "^2.1.18",
+    "@ai-sdk/openai": "1.1.9",
+    "@codemirror/lang-javascript": "^6.2.2",
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/lang-python": "^6.1.6",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/legacy-modes": "^6.4.3",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.36.3",
+    "@dnd-kit/core": "^6.3.1",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@iconify/react": "^5.2.0",
+    "@lezer/highlight": "^1.2.1",
+    "@mui/material": "^6.4.7",
+    "@radix-ui/react-accordion": "^1.2.3",
+    "@radix-ui/react-alert-dialog": "^1.1.2",
+    "@radix-ui/react-checkbox": "^1.1.4",
+    "@radix-ui/react-collapsible": "^1.1.3",
+    "@radix-ui/react-dialog": "^1.1.6",
+    "@radix-ui/react-dropdown-menu": "^2.1.6",
+    "@radix-ui/react-icons": "^1.3.0",
+    "@radix-ui/react-label": "^2.1.0",
+    "@radix-ui/react-progress": "^1.1.2",
+    "@radix-ui/react-scroll-area": "^1.2.3",
+    "@radix-ui/react-select": "^2.1.2",
+    "@radix-ui/react-separator": "^1.1.0",
+    "@radix-ui/react-slider": "^1.2.3",
+    "@radix-ui/react-slot": "^1.1.2",
+    "@radix-ui/react-switch": "^1.1.3",
+    "@radix-ui/react-tabs": "^1.1.3",
+    "@radix-ui/react-tooltip": "^1.1.8",
+    "@radix-ui/react-visually-hidden": "^1.1.0",
+    "@tabler/icons-react": "^3.31.0",
+    "@uiw/codemirror-theme-tokyo-night": "^4.23.10",
+    "@uiw/react-codemirror": "^4.23.10",
+    "@vercel/analytics": "^1.3.1",
+    "@vercel/blob": "^0.24.1",
+    "@vercel/postgres": "^0.10.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "ai": "4.1.17",
+    "bcrypt-ts": "^5.0.2",
+    "class-variance-authority": "^0.7.0",
+    "classnames": "^2.5.1",
+    "clsx": "^2.1.1",
+    "codemirror": "^6.0.1",
+    "date-fns": "^4.1.0",
+    "diff-match-patch": "^1.0.5",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.34.0",
+    "fast-deep-equal": "^3.1.3",
+    "framer-motion": "^11.3.19",
+    "geist": "^1.3.1",
+    "lucide-react": "^0.446.0",
+    "nanoid": "^5.0.8",
+    "next": "15.0.3-canary.2",
+    "next-auth": "5.0.0-beta.25",
+    "next-themes": "^0.3.0",
+    "orderedmap": "^2.1.1",
+    "papaparse": "^5.5.2",
+    "postgres": "^3.4.4",
+    "prosemirror-example-setup": "^1.2.3",
+    "prosemirror-inputrules": "^1.4.0",
+    "prosemirror-markdown": "^1.13.1",
+    "prosemirror-model": "^1.23.0",
+    "prosemirror-schema-basic": "^1.2.3",
+    "prosemirror-schema-list": "^1.4.1",
+    "prosemirror-state": "^1.4.3",
+    "prosemirror-view": "^1.34.3",
+    "react": "19.0.0-rc-45804af1-20241021",
+    "react-data-grid": "7.0.0-beta.47",
+    "react-dom": "19.0.0-rc-45804af1-20241021",
+    "react-hook-form": "^7.54.2",
+    "react-markdown": "^9.0.1",
+    "react-resizable-panels": "^2.1.7",
+    "reactflow": "^11.11.4",
+    "remark-gfm": "^4.0.0",
+    "server-only": "^0.0.1",
+    "sonner": "^1.7.4",
+    "swr": "^2.2.5",
+    "tailwind-merge": "^2.5.2",
+    "tailwindcss-animate": "^1.0.7",
+    "usehooks-ts": "^3.1.0",
+    "xterm": "^5.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@shadcn/ui": "^0.0.4",
+    "@tailwindcss/typography": "^0.5.15",
+    "@types/d3-scale": "^4.0.8",
+    "@types/node": "^22.8.6",
+    "@types/papaparse": "^5.3.15",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "drizzle-kit": "^0.25.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.5",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-import-resolver-typescript": "^3.6.3",
+    "eslint-plugin-tailwindcss": "^3.17.5",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
+  }
+}
+import {
+  type Message,
+  createDataStreamResponse,
+  smoothStream,
+  streamText,
+} from 'ai';
+
+import { auth } from '@/app/(auth)/auth';
+import { myProvider } from '@/lib/ai/models';
+import { systemPrompt } from '@/lib/ai/prompts';
+import {
+  deleteChatById,
+  getChatById,
+  saveChat,
+  saveMessages,
+} from '@/lib/db/neo4j-queries';
+import {
+  generateUUID,
+  getMostRecentUserMessage,
+  sanitizeResponseMessages,
+} from '@/lib/utils';
+
+import { generateTitleFromUserMessage } from '../../actions';
+import { createDocument } from '@/lib/ai/tools/create-document';
+import { updateDocument } from '@/lib/ai/tools/update-document';
+import { requestSuggestions } from '@/lib/ai/tools/request-suggestions';
+import { getWeather } from '@/lib/ai/tools/get-weather';
+
+export const maxDuration = 60;
+
+export async function POST(request: Request) {
+  const {
+    id,
+    messages,
+    selectedChatModel,
+  }: { id: string; messages: Array<Message>; selectedChatModel: string } =
+    await request.json();
+
+  const session = await auth();
+
+  if (!session || !session.user || !session.user.id) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  const userMessage = getMostRecentUserMessage(messages);
+
+  if (!userMessage) {
+    return new Response('No user message found', { status: 400 });
+  }
+
+  const chat = await getChatById({ id });
+
+  if (!chat) {
+    const title = await generateTitleFromUserMessage({ message: userMessage });
+    await saveChat({ id, userId: session.user.id, title });
+  }
+
+  await saveMessages({
+    messages: [{ ...userMessage, createdAt: new Date(), chatId: id }],
+  });
+
+  return createDataStreamResponse({
+    execute: (dataStream) => {
+      const result = streamText({
+        model: myProvider.languageModel(selectedChatModel),
+        system: systemPrompt({ selectedChatModel }),
+        messages,
+        maxSteps: 5,
+        experimental_activeTools:
+          selectedChatModel === 'chat-model-reasoning'
+            ? []
+            : [
+                'getWeather',
+                'createDocument',
+                'updateDocument',
+                'requestSuggestions',
+              ],
+        experimental_transform: smoothStream({ chunking: 'word' }),
+        experimental_generateMessageId: generateUUID,
+        tools: {
+          getWeather,
+          createDocument: createDocument({ session, dataStream }),
+          updateDocument: updateDocument({ session, dataStream }),
+          requestSuggestions: requestSuggestions({
+            session,
+            dataStream,
+          }),
+        },
+        onFinish: async ({ response, reasoning }) => {
+          if (session.user?.id) {
+            try {
+              const sanitizedResponseMessages = sanitizeResponseMessages({
+                messages: response.messages,
+                reasoning,
+              });
+
+              await saveMessages({
+                messages: sanitizedResponseMessages.map((message) => {
+                  return {
+                    id: message.id,
+                    chatId: id,
+                    role: message.role,
+                    content: message.content,
+                    createdAt: new Date(),
+                  };
+                }),
+              });
+            } catch (error) {
+              console.error('Failed to save chat');
+            }
+          }
+        },
+        experimental_telemetry: {
+          isEnabled: true,
+          functionId: 'stream-text',
+        },
+      });
+
+      result.mergeIntoDataStream(dataStream, {
+        sendReasoning: true,
+      });
+    },
+    onError: () => {
+      return 'Oops, an error occured!';
+    },
+  });
+}
+
+export async function DELETE(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+
+  if (!id) {
+    return new Response('Not Found', { status: 404 });
+  }
+
+  const session = await auth();
+
+  if (!session || !session.user) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  try {
+    const chat = await getChatById({ id });
+
+    if (chat.userId !== session.user.id) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    await deleteChatById({ id });
+
+    return new Response('Chat deleted', { status: 200 });
+  } catch (error) {
+    return new Response('An error occurred while processing your request', {
+      status: 500,
+    });
+  }
+}
+import { auth } from '@/app/(auth)/auth';
+import { getChatsByUserId } from '@/lib/db/neo4j-queries';
+
+export async function GET() {
+  const session = await auth();
+
+  if (!session || !session.user) {
+    return Response.json('Unauthorized!', { status: 401 });
+  }
+
+  // biome-ignore lint: Forbidden non-null assertion.
+  const chats = await getChatsByUserId({ id: session.user.id! });
+  return Response.json(chats);
+}

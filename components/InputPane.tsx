@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -9,9 +9,18 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Copy, Check, AlertCircle, CheckCircle, Clock, ArrowDown } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Icon } from "@iconify/react";
+import { Loader2, Copy, Check, AlertCircle, CheckCircle, Clock, History } from "lucide-react";
 import { useTheme } from 'next-themes';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // Simple JSON viewer component
 const JsonOut = ({ code, editable = false, onChange = () => {} }) => {
@@ -64,6 +73,13 @@ interface SchemaViewProps {
   sourceNodeId: string;
 }
 
+interface ExecutionResult {
+  data: any;
+  timestamp: number;
+  executionId?: string;
+  status?: string;
+}
+
 // Function to get status icon based on execution status
 const getStatusIcon = (status) => {
   switch (status) {
@@ -83,9 +99,12 @@ const getStatusIcon = (status) => {
 const getStatusLabel = (status) => {
   if (!status) return null;
   
+  // Handle if status is an object
+  const statusValue = typeof status === 'object' ? (status.status || 'completed') : status;
+  
   let color = 'bg-gray-100 text-gray-800';
   
-  switch (status) {
+  switch (statusValue) {
     case 'completed':
       color = 'bg-green-100 text-green-800';
       break;
@@ -102,8 +121,8 @@ const getStatusLabel = (status) => {
   
   return (
     <span className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs ${color}`}>
-      {getStatusIcon(status)}
-      <span className="capitalize">{status}</span>
+      {getStatusIcon(statusValue)}
+      <span className="capitalize">{statusValue}</span>
     </span>
   );
 };
@@ -148,7 +167,8 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
         </div>
         {value.type !== 'object' && value.type !== 'array' && (
           <span className="text-sm text-gray-500 truncate max-w-[50%]">
-            {typeof dataValue === 'object' ? JSON.stringify(dataValue) : String(dataValue)}
+            {typeof dataValue === 'object' ? JSON.stringify(dataValue || {}) : 
+              dataValue !== undefined && dataValue !== null ? String(dataValue) : ''}
           </span>
         )}
       </div>
@@ -216,7 +236,8 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
               </AccordionTrigger>
               <AccordionContent>
                 <pre className={`text-xs mt-2 whitespace-pre-wrap break-words p-2 rounded ${isDarkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'}`}>
-                  {typeof dataValue === 'object' ? JSON.stringify(dataValue, null, 2) : String(dataValue)}
+                  {typeof dataValue === 'object' ? JSON.stringify(dataValue || {}, null, 2) : 
+                    dataValue !== undefined && dataValue !== null ? String(dataValue) : ''}
                 </pre>
               </AccordionContent>
             </AccordionItem>
@@ -244,6 +265,43 @@ const SchemaView = React.memo(({ schema, data, onDragStart, sourceNodeId }: Sche
   );
 });
 
+const ExecutionHistoryDropdown = ({ results, onSelectExecution, selectedIndex }) => {
+  if (!results || results.length <= 1) return null;
+  
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="flex items-center gap-2">
+          <History className="h-4 w-4" />
+          <span>Execution {selectedIndex + 1}</span>
+          <span className="text-xs text-muted-foreground">
+            ({new Date(results[selectedIndex].timestamp).toLocaleTimeString()})
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        <DropdownMenuLabel>Execution History</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {results.map((result, index) => (
+          <DropdownMenuItem 
+            key={index}
+            onClick={() => onSelectExecution(index)}
+            className={selectedIndex === index ? "bg-muted" : ""}
+          >
+            <div className="flex items-center gap-2">
+              {result.status && getStatusIcon(result.status)}
+              <span>Execution {index + 1}</span>
+              <span className="text-xs text-muted-foreground">
+                ({new Date(result.timestamp).toLocaleTimeString()})
+              </span>
+            </div>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
 const columns = [
   { name: "NAME", uid: "name" },
   { name: "VALUE", uid: "value" },
@@ -252,14 +310,52 @@ const columns = [
   { name: "ACTIONS", uid: "actions" },
 ];
 
+const NodeSelector = ({ nodes, onSelect, selectedNode }) => {
+  const { theme, systemTheme } = useTheme();
+  const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
+  
+  if (!nodes || nodes.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-4">
+        <p className="text-sm text-gray-500">No input nodes connected</p>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="flex flex-wrap gap-2 mb-4">
+      {nodes.map((node) => (
+        <Button
+          key={node.id}
+          variant={selectedNode?.id === node.id ? "default" : "outline"}
+          size="sm"
+          onClick={() => onSelect(node)}
+          className="flex items-center gap-2"
+        >
+          <Badge 
+            variant="outline" 
+            className={`h-2 w-2 p-0 rounded-full ${node.result ? 'bg-green-500' : 'bg-gray-300'}`}
+          />
+          <span>{node.name || node.id}</span>
+          {node.status && <span className="text-xs">{getStatusIcon(node.status)}</span>}
+        </Button>
+      ))}
+    </div>
+  );
+};
+
 const EmptyState = () => (
   <div className="flex flex-col items-center justify-center h-full gap-4">
     <div className="flex flex-col items-center gap-6 p-8 rounded-md border border-gray-700 bg-[#09090b]">
-      <ArrowDown size={64} className="text-gray-500 opacity-40" />
-      <p className="text-base text-gray-500 opacity-30">No Input Connections</p>  
+      <img 
+        src="https://cdn-icons-png.flaticon.com/512/1828/1828779.png"
+        alt="Input icon"
+        className="w-24 h-24 opacity-50 [filter:invert(40%)_sepia(0%)_saturate(100%)_hue-rotate(190deg)_brightness(90%)_contrast(95%)]"
+      />
+      <p className="text-base text-gray-500 opacity-30">No Input Nodes Connected</p>  
     </div>
     <p className="text-sm text-gray-500 opacity-40 max-w-md text-center">
-      This node doesn't have any input connections yet
+      Connect input nodes to see their execution results
     </p>
   </div>
 );
@@ -268,37 +364,19 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
   const { theme, systemTheme } = useTheme();
   const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
   const [activeTab, setActiveTab] = useState("schema");
-  const [selectedNodeIndex, setSelectedNodeIndex] = useState(0);
+  const [selectedNode, setSelectedNode] = useState<any>(null);
+  const [inputData, setInputData] = useState<any>({ loading: true });
   const [draggableItems, setDraggableItems] = useState<DraggableItem[]>([]);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [page, setPage] = useState(1);
-  const rowsPerPage = 10;
+  const rowsPerPage = 11;
+  const [hasData, setHasData] = useState(false);
   const [nodeStatus, setNodeStatus] = useState<string | null>(null);
-  const [instanceId, setInstanceId] = useState(Date.now()); // Used to force re-render
+  
+  // New state for execution history
+  const [executionResults, setExecutionResults] = useState<ExecutionResult[]>([]);
+  const [selectedExecutionIndex, setSelectedExecutionIndex] = useState(0);
 
-  // Ensure we have a valid selectedNodeIndex when connectedInputNodes changes
-  useEffect(() => {
-    if (connectedInputNodes && connectedInputNodes.length > 0) {
-      if (selectedNodeIndex >= connectedInputNodes.length) {
-        setSelectedNodeIndex(0);
-      }
-      
-      // Force re-render when connected nodes change or when their execution data changes
-      setInstanceId(Date.now());
-    }
-  }, [
-    connectedInputNodes, 
-    selectedNodeIndex,
-    // Add these dependencies to detect changes in execution results
-    connectedInputNodes?.map(node => node.result?.status?.status || 
-      node.data?.result?.status?.status || 
-      node.executionResponse?.result?.results?.[node.id]?.status?.status).join('|'),
-    connectedInputNodes?.map(node => 
-      JSON.stringify(node.executionResponse?.result?.results?.[node.id] || 
-      node.result || 
-      node.data?.result))
-  ]);
-
-  // Generate draggable items from the current selected node
   const generateDraggableItems = useCallback((data: any, sourceNodeId: string, prefix = ''): DraggableItem[] => {
     let items: DraggableItem[] = [];
     
@@ -329,7 +407,6 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
     return items;
   }, []);
 
-  // Generate schema from data
   const generateSchemaFromData = useCallback((data: any): any => {
     if (!data || typeof data !== 'object') {
       return { type: 'unknown', properties: {} };
@@ -367,73 +444,237 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
     }
   }, []);
 
-  // Get the currently selected node data
-  const selectedNode = useMemo(() => {
-    if (!connectedInputNodes || connectedInputNodes.length === 0) {
-      return null;
+  // Find nodes with results
+  const nodesWithResults = useMemo(() => {
+    if (!connectedInputNodes || !Array.isArray(connectedInputNodes)) {
+      return [];
     }
     
-    return connectedInputNodes[selectedNodeIndex];
-  }, [connectedInputNodes, selectedNodeIndex, instanceId]);
+    console.log("InputPane: Processing connectedInputNodes:", 
+      connectedInputNodes.map(n => ({ 
+        id: n.id, 
+        hasResult: !!n.result || !!n.data?.result,
+        hasExecutionResponse: !!n.executionResponse || !!n.data?.executionResponse,
+        timestamp: Date.now()
+      }))
+    );
+    
+    // Make a deep copy to avoid reference issues
+    // We need to clone the entire node structure to avoid stale references
+    return connectedInputNodes.map(node => {
+      // Use JSON parsing for deep clone to break all references
+      const nodeCopy = JSON.parse(JSON.stringify(node));
+      
+      // Ensure the node has a name
+      if (!nodeCopy.name && nodeCopy.type) {
+        nodeCopy.name = `${nodeCopy.type}`;
+      }
+      
+      return nodeCopy;
+    });
+  }, [connectedInputNodes]);
 
-  // Extract the result data from the selected node
-  const nodeData = useMemo(() => {
+  // Update selected node when nodes change - always refresh
+  useEffect(() => {
+    if (nodesWithResults.length > 0) {
+      // Find a node with results or select the first one
+      const nodeWithResult = nodesWithResults.find(node => node.result || node.data?.result);
+      const nodeToSelect = nodeWithResult || nodesWithResults[0];
+      
+      console.log("Setting selected node:", nodeToSelect.id, {
+        hasResult: !!nodeToSelect.result,
+        hasDataResult: !!nodeToSelect.data?.result,
+        isChange: !selectedNode || selectedNode.id !== nodeToSelect.id,
+        timestamp: Date.now()
+      });
+      
+      // Always update the selected node when nodes change to ensure latest data
+      setSelectedNode(nodeToSelect);
+      
+      // Reset execution index when node changes
+      setSelectedExecutionIndex(0);
+    }
+  }, [nodesWithResults]);
+
+  // Process the selected node data
+  useEffect(() => {
     if (!selectedNode) {
-      return null;
+      setHasData(false);
+      setInputData({ message: "No input node selected" });
+      setExecutionResults([]);
+      return;
     }
     
-    console.log('Processing selected node for input pane:', selectedNode);
+    console.log("InputPane processing selected node:", selectedNode.id, {
+      hasResult: !!selectedNode.result,
+      hasDataResult: !!selectedNode.data?.result,
+      timestamp: Date.now()
+    });
     
-    // Find the result in the node, looking in all possible locations
-    let result = null;
-    
-    // Check node.result (top level)
-    if (selectedNode.result) {
-      result = selectedNode.result;
-    }
-    
-    // Check node.data.result
-    else if (selectedNode.data?.result) {
-      result = selectedNode.data.result;
-    }
-    
-    // Check executionResponse paths
-    else if (selectedNode.executionResponse?.result?.results?.[selectedNode.id]) {
-      result = selectedNode.executionResponse.result.results[selectedNode.id];
-    }
-    
-    else if (selectedNode.data?.executionResponse?.result?.results?.[selectedNode.id]) {
-      result = selectedNode.data.executionResponse.result.results[selectedNode.id];
-    }
-    
-    console.log('Extracted result from selected node:', result);
-    
-    // Extract status if available
-    if (result?.status) {
-      setNodeStatus(result.status.status || (typeof result.status === 'string' ? result.status : null));
-    } else {
-      setNodeStatus(null);
-    }
-    
-    // Generate draggable items based on the result
-    if (result) {
-      const items = generateDraggableItems(result, selectedNode.id);
-      setDraggableItems(items);
-    } else {
+    try {
+      // Collect all execution results with timestamps
+      const allResults: ExecutionResult[] = [];
+      let latestResult = null;
+      let latestTimestamp = 0;
+      let nodeStatusValue = null;
+      
+      // Check for primary result data
+      if (selectedNode.data?.result) {
+        const timestamp = selectedNode.data?._updateTimestamp || Date.now();
+        const execId = selectedNode.data?._executionId;
+        const status = selectedNode.data?.status;
+        
+        allResults.push({
+          data: selectedNode.data.result,
+          timestamp: timestamp,
+          executionId: execId,
+          status: typeof status === 'object' ? status.status : status
+        });
+        
+        // Set as latest if newer
+        if (timestamp > latestTimestamp) {
+          latestResult = selectedNode.data.result;
+          latestTimestamp = timestamp;
+          nodeStatusValue = status;
+        }
+      }
+      
+      // Check for result at top level
+      if (selectedNode.result) {
+        const timestamp = selectedNode._updateTimestamp || Date.now() - 100; // Slightly older
+        const execId = selectedNode._executionId;
+        const status = selectedNode.status;
+        
+        // Only add if different from what we already have
+        const isDuplicate = allResults.some(r => 
+          JSON.stringify(r.data) === JSON.stringify(selectedNode.result)
+        );
+        
+        if (!isDuplicate) {
+          allResults.push({
+            data: selectedNode.result,
+            timestamp: timestamp,
+            executionId: execId,
+            status: typeof status === 'object' ? status.status : status
+          });
+          
+          // Set as latest if newer
+          if (timestamp > latestTimestamp) {
+            latestResult = selectedNode.result;
+            latestTimestamp = timestamp;
+            nodeStatusValue = status;
+          }
+        }
+      }
+      
+      // Check for historical results in execution history if available
+      const executionHistory = 
+        selectedNode.data?._executionHistory || 
+        selectedNode._executionHistory || 
+        [];
+      
+      executionHistory.forEach(histEntry => {
+        const timestamp = histEntry.timestamp || latestTimestamp - 1000;
+        const isDuplicate = allResults.some(r => 
+          JSON.stringify(r.data) === JSON.stringify(histEntry.result)
+        );
+        
+        if (!isDuplicate && histEntry.result) {
+          allResults.push({
+            data: histEntry.result,
+            timestamp: timestamp,
+            executionId: histEntry.executionId,
+            status: histEntry.status
+          });
+        }
+      });
+      
+      // Add execution responses if they contain results for this node
+      const checkExecResponse = (execResponse) => {
+        if (!execResponse) return;
+        
+        // Extract result for this specific node
+        const nodeResult = 
+          execResponse.result?.results?.[selectedNode.id] || 
+          execResponse.results?.[selectedNode.id];
+        
+        if (nodeResult) {
+          const timestamp = execResponse.timestamp || latestTimestamp - 500;
+          const isDuplicate = allResults.some(r => 
+            JSON.stringify(r.data) === JSON.stringify(nodeResult)
+          );
+          
+          if (!isDuplicate) {
+            allResults.push({
+              data: nodeResult,
+              timestamp: timestamp,
+              executionId: execResponse.execution_id || execResponse.executionId,
+              status: nodeResult.status || execResponse.status
+            });
+          }
+        }
+      };
+      
+      // Check execution responses in both locations
+      checkExecResponse(selectedNode.data?.executionResponse);
+      checkExecResponse(selectedNode.executionResponse);
+      
+      // If we have any results
+      if (allResults.length > 0) {
+        // Sort by timestamp descending (newest first)
+        allResults.sort((a, b) => b.timestamp - a.timestamp);
+        
+        // Update the execution results
+        setExecutionResults(allResults);
+        
+        // Use selected result based on index (defaulting to latest)
+        const resultToUse = allResults[selectedExecutionIndex] || allResults[0];
+        setHasData(true);
+        setNodeStatus(resultToUse.status || nodeStatusValue);
+        
+        // Handle special data formats
+        const resultData = resultToUse.data;
+        
+        if (resultData.choices?.[0]?.message?.content) {
+          // For OpenAI/Claude API type responses, highlight the content
+          const content = resultData.choices[0].message.content;
+          setInputData({
+            content: content,
+            raw: resultData
+          });
+        } else if (resultData.body) {
+          // For API responses, highlight the body
+          setInputData({
+            body: resultData.body,
+            raw: resultData
+          });
+        } else {
+          // Use the data as is
+          setInputData(resultData);
+        }
+        
+        // Generate draggable items from the data
+        const items = generateDraggableItems(resultData, selectedNode.id);
+        setDraggableItems(items);
+      } else {
+        setHasData(false);
+        setInputData({ message: "No result data available for this node" });
+        setDraggableItems([]);
+        setExecutionResults([]);
+      }
+    } catch (error) {
+      console.error('InputPane: Error processing data:', error);
+      setInputData({ error: error.message });
       setDraggableItems([]);
+      setExecutionResults([]);
     }
-    
-    return result;
-  }, [selectedNode, generateDraggableItems, instanceId]);
+  }, [selectedNode, selectedExecutionIndex, generateDraggableItems]);
 
-  // Generate schema from the current node data
-  const nodeSchema = useMemo(() => {
-    return generateSchemaFromData(nodeData);
-  }, [nodeData, generateSchemaFromData]);
+  const inputSchema = useMemo(() => generateSchemaFromData(inputData), [inputData, generateSchemaFromData]);
 
   const handleDragStart = useCallback((event: React.DragEvent<HTMLElement>, item: DraggableItem) => {
     event.stopPropagation();
-    console.log('Drag start from InputPane:', item);
+    console.log('Drag start from Input:', item);
     event.dataTransfer.setData('text/plain', JSON.stringify(item));
   }, []);
 
@@ -443,6 +684,7 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
     
     if (typeof value === 'object') {
       try {
+        if (!value) return '{}';
         if (Object.keys(value).length > 3) {
           return JSON.stringify({
             ...Object.fromEntries(
@@ -528,15 +770,15 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
     <>
       {activeTab === "schema" && (
         <SchemaView 
-          schema={nodeSchema} 
-          data={nodeData} 
+          schema={inputSchema} 
+          data={inputData} 
           onDragStart={handleDragStart}
-          sourceNodeId={selectedNode?.id || nodeId}
+          sourceNodeId={selectedNode?.id || ""}
         />
       )}
       {activeTab === "json" && (
         <JsonOut 
-          code={JSON.stringify(nodeData, null, 2)} 
+          code={JSON.stringify(inputData, null, 2)} 
           editable={false} 
         />
       )}
@@ -595,12 +837,14 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
         </div>
       )}
     </>
-  ), [activeTab, nodeSchema, nodeData, handleDragStart, items, page, pages, renderCell, selectedNode, nodeId]);
+  ), [activeTab, inputSchema, inputData, handleDragStart, items, page, pages, renderCell, selectedNode]);
+
+  const hasConnectedNodes = Array.isArray(connectedInputNodes) && connectedInputNodes.length > 0;
 
   return (
     <div style={{ transform: 'scale(0.75)', transformOrigin: 'top left', width: '133.33%', height: '133.33%' }}>
       <Card className="flex flex-col h-full bg-gray-100 dark:bg-[#09090b]">
-        {!connectedInputNodes || connectedInputNodes.length === 0 ? (
+        {!hasConnectedNodes ? (
           <EmptyState />
         ) : (
           <>
@@ -608,30 +852,20 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
               <div className="flex items-center justify-between w-full">
                 <div className="flex items-center gap-3">
                   <Button variant="outline" className="font-bold">
-                    Input Data
+                    Input Nodes
                   </Button>
-                  
-                  {/* Node Source Selector */}
-                  {connectedInputNodes.length > 1 && (
-                    <Select 
-                      value={String(selectedNodeIndex)} 
-                      onValueChange={(value) => setSelectedNodeIndex(parseInt(value))}
-                    >
-                      <SelectTrigger className="w-32">
-                        <SelectValue placeholder="Select source" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {connectedInputNodes.map((node, index) => (
-                          <SelectItem key={node.id} value={String(index)}>
-                            {node.type || node.id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
                   
                   {/* Node Status Badge */}
                   {nodeStatus && getStatusLabel(nodeStatus)}
+                  
+                  {/* Execution History Dropdown */}
+                  {executionResults.length > 1 && (
+                    <ExecutionHistoryDropdown
+                      results={executionResults}
+                      onSelectExecution={setSelectedExecutionIndex}
+                      selectedIndex={selectedExecutionIndex}
+                    />
+                  )}
                 </div>
                 
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
@@ -644,24 +878,63 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
               </div>
             </CardHeader>
 
-            <CardContent className="overflow-hidden flex-1">
+            <CardContent className="overflow-hidden flex-1 flex flex-col">
+              {/* Node Selector at the top */}
+              <NodeSelector 
+                nodes={nodesWithResults} 
+                onSelect={setSelectedNode} 
+                selectedNode={selectedNode} 
+              />
+              
               <div className="h-full overflow-auto">
-                {!nodeData ? (
-                  <div className="flex justify-center items-center h-full flex-col gap-4">
-                    <p className="text-muted-foreground">No result data available from this input node</p>
-                    {selectedNode && (
-                      <div className="text-xs text-muted-foreground">
-                        Connected to node: {selectedNode.id}
-                      </div>
-                    )}
+                {inputData.loading ? (
+                  <div className="flex justify-center items-center h-full">
+                    <Loader2 className="h-6 w-6 animate-spin" />
                   </div>
-                ) : (
+                ) : hasData ? (
                   renderContent()
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full">
+                    <p className="text-gray-500">No result data available for this node</p>
+                  </div>
                 )}
               </div>
             </CardContent>
           </>
         )}
+
+        <Dialog open={isExpanded} onOpenChange={setIsExpanded}>
+          <DialogContent className="max-w-[95vw] max-h-[95vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex justify-between items-center w-full">
+                <div className="flex items-center gap-3">
+                  <span>Input Data (Expanded View)</span>
+                  {nodeStatus && getStatusLabel(nodeStatus)}
+                  {executionResults.length > 1 && (
+                    <ExecutionHistoryDropdown
+                      results={executionResults}
+                      onSelectExecution={setSelectedExecutionIndex}
+                      selectedIndex={selectedExecutionIndex}
+                    />
+                  )}
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setIsExpanded(false)}>
+                  <Icon icon="mdi:close" />
+                </Button>
+              </DialogTitle>
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-auto">
+                <TabsList>
+                  <TabsTrigger value="schema">Schema</TabsTrigger>
+                  <TabsTrigger value="json">JSON</TabsTrigger>
+                  <TabsTrigger value="table">Table</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </DialogHeader>
+            <div className="py-4">
+              {renderContent()}
+            </div>
+          </DialogContent>
+        </Dialog>
       </Card>
     </div>
   );

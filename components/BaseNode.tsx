@@ -33,6 +33,7 @@ interface BaseNodeProps extends NodeProps {
   onNodeDelete: (id: string) => void;
   allNodes?: Node[];
   allEdges?: Edge[];
+  getNodeResult?: () => any; // New prop to get node result
 }
 
 interface NodeStyles {
@@ -53,6 +54,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
   onNodeDelete,
   allNodes,
   allEdges,
+  getNodeResult,
 }) => {
   // State management
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -74,11 +76,56 @@ const BaseNode: FC<BaseNodeProps> = memo(({
   // Get the node status from data if available
   const executionStatus = data?.status?.status || null;
   
-  // Extract node results (new)
+  // Extract node results using new getNodeResult prop if available
   const nodeResult = useMemo(() => {
-    if (!data.result) return null;
-    return data.result;
-  }, [data.result]);
+    // First try to use the getNodeResult prop
+    if (typeof getNodeResult === 'function') {
+      const result = getNodeResult();
+      if (result) {
+        console.log(`BaseNode: Using result from getNodeResult prop for node ${id}`);
+        return result;
+      }
+    }
+    
+    // Then try data.getNodeResult function
+    if (typeof data.getNodeResult === 'function') {
+      const result = data.getNodeResult();
+      if (result) {
+        console.log(`BaseNode: Using result from data.getNodeResult for node ${id}`);
+        return result;
+      }
+    }
+    
+    // Finally fall back to direct result property
+    if (data.result) {
+      console.log(`BaseNode: Using result from data.result for node ${id}`);
+      return data.result;
+    }
+    
+    // If node has status but no result, create a synthetic result
+    if (data.status && data.status.status === 'failed') {
+      console.log(`BaseNode: Creating synthetic result from status for node ${id}`);
+      return {
+        error: data.status.message || "Execution failed",
+        execution_status: data.status,
+        timestamp: data.status.timestamp || Date.now(),
+        node_id: id,
+        configuration: {
+          id: id,
+          type: data.type,
+          operation: data.operation,
+          // Include other relevant node config
+          ...Object.entries(data)
+            .filter(([key]) => 
+              !key.startsWith('_') && 
+              !['result', 'executionResponse', 'status', 'position_x', 'position_y'].includes(key))
+            .reduce((obj, [k, v]) => ({...obj, [k]: v}), {})
+        }
+      };
+    }
+    
+    return null;
+  }, [id, data, getNodeResult]);
   
   // Check if node has results
   const hasResults = !!nodeResult;
@@ -119,6 +166,12 @@ const BaseNode: FC<BaseNodeProps> = memo(({
   
   // Extract error message from execution response if available
   const errorMessage = useMemo(() => {
+    // First check nodeResult for error
+    if (nodeResult?.error) {
+      return typeof nodeResult.error === 'string' ? 
+        nodeResult.error : JSON.stringify(nodeResult.error);
+    }
+    
     if (!data.executionResponse) return null;
     
     // Direct error in the execution response
@@ -151,7 +204,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     }
     
     return null;
-  }, [data.executionResponse, data.id]);
+  }, [data.executionResponse, data.id, nodeResult]);
 
   // Memoized connected nodes with properly formatted data
   const memoizedConnectedNodes = useMemo(() => {
@@ -416,7 +469,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
       if (typeof data.executionResponse === 'string') {
         message = data.executionResponse;
       } else if (typeof data.executionResponse === 'object') {
-        if (!data.executionResponse?.result?.status === 'error' && !data.executionResponse?.error) {
+        if (data.executionResponse?.result?.status !== 'error' && !data.executionResponse?.error) {
           setNodeStatus('Onboarding');
         }
         message = JSON.stringify(data.executionResponse);
@@ -864,7 +917,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
         nodeDescription={data?.description || ''}
         nodeData={{
           ...data,
-          result: nodeResult // Ensure result is passed
+          result: nodeResult // Use the enhanced nodeResult from our new extraction logic
         }}
         connectedInputNodes={connectedInputNodes} // Pass connected nodes to DraggablePanels
       />

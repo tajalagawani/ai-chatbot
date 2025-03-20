@@ -1,5 +1,5 @@
 import { auth } from '@/app/(auth)/auth';
-import { getDocumentById } from '@/lib/db/queries';
+import { getDocumentById } from '@/lib/db/neo4j-queries';
 
 export async function GET(request: Request) {
   try {

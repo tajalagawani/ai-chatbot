@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 /* eslint-disable jsx-a11y/no-static-element-interactions */
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { Modal, Box, Paper, Card } from "@mui/material";
 import { DndContext, DragEndEvent } from "@dnd-kit/core";
 import { useTheme } from "next-themes";
@@ -47,6 +47,56 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
     const [isFullView, setIsFullView] = useState(true);
     const [activeTab, setActiveTab] = useState('settings');
     const [isDragging, setIsDragging] = useState(false);
+    const [refreshKey, setRefreshKey] = useState(0); // Add refresh key for forcing re-renders
+
+    // When the modal opens or nodeData changes, update the refresh key
+    useEffect(() => {
+      if (isOpen) {
+        setRefreshKey(prev => prev + 1);
+      }
+    }, [isOpen, nodeData]);
+
+    // Extract node result from various possible locations
+    const nodeResult = useMemo(() => {
+      if (!nodeData) return null;
+      
+      // Log what result data we have available
+      console.log('DraggablePanels result data check:', {
+        nodeId,
+        hasDirectResult: !!nodeData.result,
+        resultType: nodeData.result ? typeof nodeData.result : 'null',
+        hasExecutionResponse: !!executionResponse,
+        hasDataStatus: !!nodeData.status,
+        statusType: nodeData.status ? typeof nodeData.status : 'null'
+      });
+      
+      // Check direct result first
+      if (nodeData.result) {
+        console.log('Using result from nodeData.result');
+        return nodeData.result;
+      }
+      
+      // Then check execution response
+      if (executionResponse) {
+        console.log('Using result from executionResponse');
+        return executionResponse;
+      }
+      
+      // If no result but we have status info, create a status-based result object
+      if (nodeData.status) {
+        console.log('Creating result from status information');
+        return {
+          execution_status: nodeData.status,
+          message: `Execution ${nodeData.status.status || 'completed'}`,
+          timestamp: nodeData.status.timestamp || Date.now(),
+          node_id: nodeId
+        };
+      }
+      
+      // Fallback: if no specific result data, use the node config data itself
+      console.log('No result found, using node data itself');
+      return nodeData;
+    }, [nodeData, executionResponse, nodeId]);
 
     const containerWidth = 2000;
     const minimumBoxWidth = 500;
@@ -58,7 +108,9 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
     });
 
     const handleExecutionComplete = useCallback((response: any) => {
+      console.log('Execution completed with response:', response);
       setExecutionResponse(response);
+      setRefreshKey(prevKey => prevKey + 1); // Force re-render
     }, []);
 
     const handleMouseDown = useCallback(
@@ -115,32 +167,59 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
       [customSettings],
     );
 
+    // Log connected input nodes for debugging
+    useEffect(() => {
+      if (connectedInputNodes && connectedInputNodes.length > 0) {
+        console.log('Connected input nodes in DraggablePanels:', 
+          connectedInputNodes.map(node => ({
+            id: node.id,
+            hasResult: !!node.result || !!node.data?.result,
+            resultSummary: node.result ? 
+              typeof node.result === 'object' ? 
+              Object.keys(node.result).join(',') : 
+              typeof node.result : 'none'
+          }))
+        );
+      }
+    }, [connectedInputNodes]);
+
     const memoizedInputPane = useMemo(
       () => (
         <InputPane
           connectedInputNodes={connectedInputNodes}
           nodeId={nodeId}
           workflowId={workflowId}
+          key={`input-pane-${refreshKey}`}
         />
       ),
-      [nodeId, workflowId, connectedInputNodes],
+      [nodeId, workflowId, connectedInputNodes, refreshKey],
     );
 
     const memoizedOutputPane = useMemo(
       () => (
         <OutputPane
+          result={nodeResult}
           executionResponse={executionResponse}
           nodeId={nodeId}
           workflowId={workflowId}
+          nodeStatus={nodeData?.status}
+          key={`output-pane-${refreshKey}`}
         />
       ),
-      [nodeId, workflowId, executionResponse],
+      [nodeId, workflowId, executionResponse, nodeResult, nodeData?.status, refreshKey],
     );
 
     const renderPanelHeader = () => (
       <div className="flex items-center p-2">
         <div className="flex items-center gap-2 z-10">
           <span>{nodeName}</span>
+          {nodeData?.status && (
+            <span className="text-xs ml-2">
+              {typeof nodeData.status === 'object' ? 
+                `Status: ${nodeData.status.status || 'unknown'}` : 
+                `Status: ${nodeData.status}`}
+            </span>
+          )}
         </div>
       </div>
     );

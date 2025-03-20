@@ -1,5 +1,5 @@
 import { auth } from '@/app/(auth)/auth';
-import { getDocumentById } from '@/lib/db/queries';
+import { getDocumentById } from '@/lib/db/neo4j-queries';
 import { ExecutionManager } from '@/lib/act/execution';
 
 export async function POST(request: Request) {

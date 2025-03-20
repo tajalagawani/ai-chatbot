@@ -1,5 +1,3 @@
-/* eslint-disable prettier/prettier */
-/* eslint-disable jsx-a11y/no-static-element-interactions */
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { Modal, Box, Paper, Card } from "@mui/material";
 import { DndContext, DragEndEvent } from "@dnd-kit/core";
@@ -168,118 +166,34 @@ const DraggablePanels: React.FC<DraggablePanelsProps> = React.memo(
       [customSettings],
     );
 
-    // Process connected nodes to ensure they have result data
-    const processedConnectedNodes = useMemo(() => {
-      console.log("Processing connected nodes with refreshKey:", refreshKey);
-      console.log("Raw connected input nodes in DraggablePanels:", connectedInputNodes);
-      
-      if (!connectedInputNodes || !Array.isArray(connectedInputNodes) || connectedInputNodes.length === 0) {
-        return [];
-      }
-      
-      // Return enhanced nodes with consistent result data structure
-      const enhancedNodes = connectedInputNodes.map(node => {
-        // Make a deep copy of the node to avoid reference issues
-        const enhancedNode = JSON.parse(JSON.stringify(node));
-        
-        // Check if we have a recent execution result that should override
-        if (executionResponse && lastExecutionTime > 0) {
-          console.log("Using latest execution result for node", node.id);
-          // Add the execution result at both top level and in data
-          enhancedNode.result = executionResponse;
-          if (!enhancedNode.data) enhancedNode.data = {};
-          enhancedNode.data.result = executionResponse;
-          enhancedNode.executionResponse = executionResponse;
-          enhancedNode.data.executionResponse = executionResponse;
-          enhancedNode._lastUpdated = lastExecutionTime;
-          return enhancedNode;
-        }
-        
-        // Look for result data in all possible locations
-        let latestResult = null;
-        
-        // Check node.result (top level)
-        if (node.result) {
-          latestResult = node.result;
-        }
-        
-        // Check node.data.result
-        if (node.data?.result) {
-          latestResult = node.data.result;
-        }
-        
-        // Check executionResponse paths
-        if (node.executionResponse?.result?.results?.[node.id]) {
-          latestResult = node.executionResponse.result.results[node.id];
-        }
-        
-        if (node.data?.executionResponse?.result?.results?.[node.id]) {
-          latestResult = node.data.executionResponse.result.results[node.id];
-        }
-        
-        // Add result to both top level and data object to ensure it's accessible
-        if (latestResult) {
-          enhancedNode.result = latestResult;
-          
-          // Make sure data object exists
-          if (!enhancedNode.data) {
-            enhancedNode.data = {};
-          }
-          
-          // Add the result to the data object too
-          enhancedNode.data.result = latestResult;
-        }
-        
-        // Do the same for executionResponse
-        if (node.executionResponse) {
-          enhancedNode.executionResponse = node.executionResponse;
-          if (!enhancedNode.data) enhancedNode.data = {};
-          enhancedNode.data.executionResponse = node.executionResponse;
-        } else if (node.data?.executionResponse) {
-          enhancedNode.executionResponse = node.data.executionResponse;
-          if (!enhancedNode.data) enhancedNode.data = {};
-          enhancedNode.data.executionResponse = node.data.executionResponse;
-        }
-        
-        return enhancedNode;
-      });
-      
-      console.log("Enhanced connected nodes:", enhancedNodes.map(n => ({ 
-        id: n.id, 
-        hasResult: !!n.result,
-        resultSource: n.result ? 'Found' : 'None',
-        lastUpdated: n._lastUpdated
-      })));
-      
-      return enhancedNodes;
-    }, [connectedInputNodes, refreshKey, executionResponse, lastExecutionTime]);
-
     // In DraggablePanels.tsx, make sure memoizedInputPane is correctly set up
     const memoizedInputPane = useMemo(
       () => (
         <InputPane
-          connectedInputNodes={processedConnectedNodes}
+          connectedInputNodes={connectedInputNodes}
           nodeId={nodeId}
           workflowId={workflowId}
           key={`input-pane-${refreshKey}-${lastExecutionTime}`}
         />
       ),
-      [nodeId, workflowId, processedConnectedNodes, refreshKey, lastExecutionTime],
+      [nodeId, workflowId, connectedInputNodes, refreshKey, lastExecutionTime],
     );
 
     // In DraggablePanels.tsx, update the memoizedOutputPane to pass results
-    const memoizedOutputPane = useMemo(
-      () => (
-        <OutputPane
-          executionResponse={executionResponse}
-          result={nodeData?.result || executionResponse}
-          nodeId={nodeId}
-          workflowId={workflowId}
-          key={`output-pane-${refreshKey}-${lastExecutionTime}`}
-        />
-      ),
-      [nodeId, workflowId, executionResponse, nodeData?.result, refreshKey, lastExecutionTime],
-    );
+// In DraggablePanels.tsx, update the memoizedOutputPane to pass nodeData directly
+const memoizedOutputPane = useMemo(
+  () => (
+    <OutputPane
+      nodeId={nodeId}
+      workflowId={workflowId}
+      result={nodeData?.result || nodeData || executionResponse}
+      executionResponse={executionResponse}
+      nodeStatus={nodeData?.status}
+      key={`output-pane-${refreshKey}-${lastExecutionTime}`}
+    />
+  ),
+  [nodeId, workflowId, nodeData, executionResponse, refreshKey, lastExecutionTime],
+);
 
     const renderDynamicSettings = () => {
       // If custom settings are provided, use those instead

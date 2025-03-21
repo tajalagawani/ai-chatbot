@@ -23,7 +23,7 @@ import { useLocalStorage, useWindowSize } from 'usehooks-ts';
 
 import { sanitizeUIMessages } from '@/lib/utils';
 
-import { ArrowUpIcon, PaperclipIcon, StopIcon } from './icons';
+import { FileEdit, Paperclip, ArrowUp, X, Square, ChevronRight, Maximize } from 'lucide-react';
 import { PreviewAttachment } from './preview-attachment';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
@@ -67,6 +67,7 @@ function PureMultimodalInput({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
+  const [showPremiumNotification, setShowPremiumNotification] = useState(true);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -194,7 +195,23 @@ function PureMultimodalInput({
   );
 
   return (
-    <div className="relative w-full flex flex-col gap-4">
+    <div className="relative w-full flex flex-col">
+      {/* Premium notification - made smaller */}
+      {showPremiumNotification && (
+        <div className="flex justify-between items-center px-4 py-2 bg-black text-white mb-1">
+          <p className="text-sm font-normal">Need more messages? Get higher limits with Premium.</p>
+          <div className="flex items-center gap-2">
+            <button className="text-teal-400 font-normal text-sm">Upgrade Plan</button>
+            <button 
+              className="text-gray-300 hover:text-gray-100"
+              onClick={() => setShowPremiumNotification(false)}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {messages.length === 0 &&
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
@@ -211,7 +228,7 @@ function PureMultimodalInput({
       />
 
       {(attachments.length > 0 || uploadQueue.length > 0) && (
-        <div className="flex flex-row gap-2 overflow-x-scroll items-end">
+        <div className="flex flex-row gap-2 overflow-x-scroll items-end px-4 mb-2">
           {attachments.map((attachment) => (
             <PreviewAttachment key={attachment.url} attachment={attachment} />
           ))}
@@ -230,45 +247,85 @@ function PureMultimodalInput({
         </div>
       )}
 
-      <Textarea
-        ref={textareaRef}
-        placeholder="Send a message..."
-        value={input}
-        onChange={handleInput}
-        className={cx(
-          'min-h-[24px] max-h-[calc(75dvh)] overflow-hidden resize-none rounded-2xl !text-base bg-muted pb-10  px-4',
-          className,
-        )}
-        rows={2}
-        autoFocus
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
+      {/* Input area styled to match the screenshot - darker, more minimal */}
+      <div className="relative border border-gray-800 rounded-lg bg-[#0d0d0d] mb-1">
+        {/* Input field with chevron */}
+        <div className="flex items-center pl-4 py-4">
+          <ChevronRight className="h-5 w-5 text-gray-500" />
+          <Textarea
+            ref={textareaRef}
+            placeholder=""
+            value={input}
+            onChange={handleInput}
+            className="w-full bg-transparent outline-none resize-none text-gray-300 border-0 px-2 py-0 focus-visible:ring-0 focus-visible:ring-offset-0 min-h-[20px]"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
 
-            if (isLoading) {
-              toast.error('Please wait for the model to finish its response!');
-            } else {
-              submitForm();
-            }
-          }
-        }}
-      />
-
-      <div className="absolute bottom-0 p-2 w-fit flex flex-row justify-start">
-        <AttachmentsButton fileInputRef={fileInputRef} isLoading={isLoading} />
-      </div>
-
-      <div className="absolute bottom-0 right-0 p-2 w-fit flex flex-row justify-end">
-        {isLoading ? (
-          <StopButton stop={stop} setMessages={setMessages} />
-        ) : (
-          <SendButton
-            input={input}
-            submitForm={submitForm}
-            uploadQueue={uploadQueue}
+                if (isLoading) {
+                  toast.error('Please wait for the model to finish its response!');
+                } else {
+                  submitForm();
+                }
+              }
+            }}
           />
-        )}
+        </div>
+        
+        {/* Bottom toolbar */}
+        <div className="flex justify-between items-center border-t border-gray-800 px-4 py-2">
+          <div className="flex items-center">
+            <button className="bg-gray-800 rounded px-3 py-1 text-xs text-gray-300 flex items-center gap-1">
+              No project selected
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <button className="text-gray-500 hover:text-gray-300 p-1">
+              <Maximize className="h-5 w-5" />
+            </button>
+            <button 
+              className="text-gray-500 hover:text-gray-300 p-1"
+              onClick={(event) => {
+                event.preventDefault();
+                fileInputRef.current?.click();
+              }}
+              disabled={isLoading}
+            >
+              <Paperclip className="h-5 w-5" />
+            </button>
+            {isLoading ? (
+              <button
+                className="text-white p-1 rounded-md"
+                onClick={(event) => {
+                  event.preventDefault();
+                  stop();
+                  setMessages((messages) => sanitizeUIMessages(messages));
+                }}
+              >
+                <Square className="h-5 w-5" />
+              </button>
+            ) : (
+              <button
+                className="text-white p-1 bg-gray-800 rounded-md hover:bg-gray-700"
+                onClick={(event) => {
+                  event.preventDefault();
+                  submitForm();
+                }}
+                disabled={input.length === 0 || uploadQueue.length > 0}
+              >
+                <ArrowUp className="h-5 w-5" />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Disclaimer text restored */}
+      <p className="text-gray-500 text-xs px-2 mt-1">Orcha may make mistakes. Please use with discretion.</p>
     </div>
   );
 }
@@ -283,80 +340,3 @@ export const MultimodalInput = memo(
     return true;
   },
 );
-
-function PureAttachmentsButton({
-  fileInputRef,
-  isLoading,
-}: {
-  fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
-  isLoading: boolean;
-}) {
-  return (
-    <Button
-      className="rounded-md rounded-bl-lg p-[7px] h-fit dark:border-zinc-700 hover:dark:bg-zinc-700 hover:bg-zinc-200"
-      onClick={(event) => {
-        event.preventDefault();
-        fileInputRef.current?.click();
-      }}
-      disabled={isLoading}
-      variant="ghost"
-    >
-      <PaperclipIcon size={14} />
-    </Button>
-  );
-}
-
-const AttachmentsButton = memo(PureAttachmentsButton);
-
-function PureStopButton({
-  stop,
-  setMessages,
-}: {
-  stop: () => void;
-  setMessages: Dispatch<SetStateAction<Array<Message>>>;
-}) {
-  return (
-    <Button
-      className="rounded-full p-1.5 h-fit border dark:border-zinc-600"
-      onClick={(event) => {
-        event.preventDefault();
-        stop();
-        setMessages((messages) => sanitizeUIMessages(messages));
-      }}
-    >
-      <StopIcon size={14} />
-    </Button>
-  );
-}
-
-const StopButton = memo(PureStopButton);
-
-function PureSendButton({
-  submitForm,
-  input,
-  uploadQueue,
-}: {
-  submitForm: () => void;
-  input: string;
-  uploadQueue: Array<string>;
-}) {
-  return (
-    <Button
-      className="rounded-full p-1.5 h-fit border dark:border-zinc-600"
-      onClick={(event) => {
-        event.preventDefault();
-        submitForm();
-      }}
-      disabled={input.length === 0 || uploadQueue.length > 0}
-    >
-      <ArrowUpIcon size={14} />
-    </Button>
-  );
-}
-
-const SendButton = memo(PureSendButton, (prevProps, nextProps) => {
-  if (prevProps.uploadQueue.length !== nextProps.uploadQueue.length)
-    return false;
-  if (prevProps.input !== nextProps.input) return false;
-  return true;
-});

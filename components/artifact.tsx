@@ -501,7 +501,7 @@ function PureArtifact({
 
           {/* Artifact content panel - adjust for full-screen mode */}
           <motion.div
-            className="fixed h-dvh flex flex-col overflow-y-scroll border-zinc-200 bg-background dark:bg-background"
+            className="fixed h-dvh flex flex-col overflow-y-scroll border-zinc-200= bg-background dark:bg-background"
             initial={
               isMobile
                 ? {

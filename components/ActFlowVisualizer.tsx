@@ -1135,7 +1135,9 @@ useEffect(() => {
   }
 }, [metadata?.outputs, setMetadata, setNodes]);
 
-// Initialize flow from initialLayout or content
+// Add this to the useEffect that initializes flow from content
+// Inside ActFlowVisualizer.tsx, find the useEffect that has the dependency array [content, initialLayout, setNodes, setEdges, reactFlowInstance]
+
 useEffect(() => {
   // If we have initialLayout, use that first
   if (initialLayout && initialLayout.nodes && initialLayout.nodes.length > 0) {
@@ -1175,6 +1177,19 @@ useEffect(() => {
     
     // Reset unsaved changes flag since we just loaded
     setHasUnsavedChanges(false);
+    
+    // Auto fit view after a short delay to ensure the nodes are properly rendered
+    if (reactFlowInstance) {
+      setTimeout(() => {
+        reactFlowInstance.fitView({
+          padding: 0.2,
+          minZoom: 0.5,
+          maxZoom: 1.5,
+          duration: 800
+        });
+      }, 300);
+    }
+    
     return;
   }
   
@@ -1231,16 +1246,25 @@ useEffect(() => {
     setNodes(flowNodes);
     setEdges(flowEdges);
   
-    // Fit view if instance exists
+    // Enhanced fit view logic - ensure it works consistently
     if (reactFlowInstance) {
+      // First fit - immediate but with no animation
+      reactFlowInstance.fitView({
+        padding: 0.2,
+        minZoom: 0.5,
+        maxZoom: 1.5,
+        duration: 1
+      });
+      
+      // Second fit with delay and animation for better visual experience
       setTimeout(() => {
         reactFlowInstance.fitView({
-          padding: 0.4,
-          minZoom: 0.1,
-          maxZoom: 2,
-          duration: 300
+          padding: 0.2,
+          minZoom: 0.5,
+          maxZoom: 1.5,
+          duration: 800
         });
-      }, 100);
+      }, 300);
     }
     
     // Reset unsaved changes flag since we just loaded
@@ -1249,7 +1273,6 @@ useEffect(() => {
     toast.error('Failed to parse workflow content');
   }
 }, [content, initialLayout, setNodes, setEdges, reactFlowInstance, metadata?.nodeStatus, metadata?.executionResult?.results]);
-
 const nodeTypes = useMemo<NodeTypes>(() => ({
   baseNode: (props: any) => (
     <BaseNode
@@ -1274,7 +1297,7 @@ const edgeTypes = useMemo<EdgeTypes>(() => ({
 const proOptions = { hideAttribution: true };
 
 return (
-  <div className="w-full h-[95%] relative">
+  <div className="w-full h-[100%] relative">
     <ReactFlow
       nodes={nodes}
       edges={edges}
@@ -1285,17 +1308,16 @@ return (
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       minZoom={0.1}
-      maxZoom={2}
+      maxZoom={1}
       defaultViewport={defaultViewport}
       fitView
       fitViewOptions={{
-        padding: 0.5,
+        padding: 0.9,
         minZoom: 0.5,
-        maxZoom: 2
+        maxZoom: 1.5
       }}
       panOnDrag={true}
       snapToGrid={true}
-      snapGrid={[15, 15]}
       className={isDarkTheme ? "react-flow-dark-theme" : "react-flow-light-theme"}
       proOptions={proOptions} // Add this prop to hide the ReactFlow watermark
     >
@@ -1303,7 +1325,7 @@ return (
         color={isDarkTheme ? "#5b5b5b" : "#aaaaaa"}
         gap={20}
         style={{ 
-          backgroundColor: isDarkTheme ? '#1111177a' : '#f8f9fa' 
+          backgroundColor: isDarkTheme ? '#0f0f10' : '#f8f9fa' 
         }}
       />
       
@@ -1428,20 +1450,20 @@ return (
     <style jsx global>{`
       /* Dark theme styles */
       .react-flow-dark-theme {
-        background-color:rgba(0, 0, 0, 0);
+        background-color:rgba(18, 18, 18, 0.26);
       }
  
-      .react-flow-dark-theme .react-flow__handle {
-        background-color:rgb(19, 21, 25);
+      .react-flow-dark-theme .react-flow__background {
+        background-color:rgba(150, 144, 144, 0);
       }
       .react-flow-dark-theme .react-flow__edge-path {
         stroke:rgb(39, 42, 48);
       }
       .minimap-dark .react-flow__minimap-mask {
-        fill: rgba(12, 11, 11, 0.7);
+        fill: rgba(30, 30, 30, 0.7);
       }
       .controls-dark {
-        background-color:rgba(102, 92, 92, 0);
+        background-color:rgba(17, 16, 16, 0);
         border-color: #333;
       }
       .controls-dark button {
@@ -1450,7 +1472,7 @@ return (
         color: #e5e7eb;
       }
       .controls-dark button:hover {
-        background-color:rgb(0, 0, 0);
+        background-color:rgb(66, 66, 66);
       }
 
       /* Light theme styles */

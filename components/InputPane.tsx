@@ -204,4 +204,4 @@ const InputPane: React.FC<InputPaneProps> = ({ nodeId, workflowId, connectedInpu
   );
 };
 
-export default React.memo(InputPane); 
+export default React.memo(InputPane);

@@ -465,21 +465,26 @@ const codeArtifact = {
     }, [handleToggleView]);
 
     // Ensure there's always at least one console output
-    useEffect(() => {
-      if (!metadata?.outputs || metadata.outputs.length === 0) {
-        setMetadata(prev => ({
-          ...prev,
-          outputs: [{
-            id: generateUUID(),
-            contents: [{
-              type: 'text',
-              value: `> Console ready. Docker status: ${prev.dockerStatus || 'unknown'}`
-            }],
-            status: 'completed'
-          }]
-        }));
-      }
-    }, [setMetadata]);
+// Ensure there's always at least one console output
+useEffect(() => {
+  if (!metadata?.outputs || metadata.outputs.length === 0) {
+    setMetadata(prev => {
+      // Add null check for prev
+      const dockerStatus = prev?.dockerStatus || 'unknown';
+      return {
+        ...(prev || {}), // Use empty object if prev is undefined
+        outputs: [{
+          id: generateUUID(),
+          contents: [{
+            type: 'text',
+            value: `> Console ready. Docker status: ${dockerStatus}`
+          }],
+          status: 'completed'
+        }]
+      };
+    });
+  }
+}, [setMetadata]);
 
     // Calculate output counts for badges
     const errorCount = (metadata?.outputs || [])
@@ -683,7 +688,7 @@ const codeArtifact = {
   },
 
   actions: actions,
-
+  toolbar: toolbar,
 
   onStreamPart: ({ streamPart, setArtifact }) => {
     if (streamPart.type === 'code-delta') {

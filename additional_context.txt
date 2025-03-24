@@ -1,0 +1,2280 @@
+import { auth } from '@/app/(auth)/auth';
+import { getDocumentById } from '@/lib/db/queries';
+import { ExecutionManager } from '@/lib/act/execution';
+import { ActValidator } from '@/artifacts/code/server';
+
+export async function POST(request: Request) {
+  try {
+    const session = await auth();
+    if (!session?.user) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    const { documentId } = await request.json();
+    if (!documentId) {
+      return new Response('Missing documentId', { status: 400 });
+    }
+
+    // Get the document
+    const document = await getDocumentById({ id: documentId });
+    if (!document) {
+      return new Response('Document not found', { status: 404 });
+    }
+
+    // Verify ownership
+    if (document.userId !== session.user.id) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    // Parse ACT content
+    const validator = new ActValidator(document.content);
+    const parsedWorkflow = validator.parseContent();
+    
+    if (!validator.validate()) {
+      return Response.json({
+        success: false,
+        error: 'Invalid workflow configuration'
+      }, { status: 400 });
+    }
+
+    // Execute the workflow
+    const executionManager = new ExecutionManager();
+    const result = await executionManager.execute_workflow(parsedWorkflow);
+    
+    if (!result.success) {
+      return Response.json({
+        success: false,
+        error: result.error
+      }, { status: 400 });
+    }
+
+    return Response.json({
+      success: true,
+      executionId: result.executionId
+    });
+
+  } catch (error) {
+    console.error('Workflow execution failed:', error);
+    return Response.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Workflow execution failed'
+    }, { status: 500 });
+  }
+}import 'server-only';
+
+import { genSaltSync, hashSync } from 'bcrypt-ts';
+import { and, asc, desc, eq, gt, gte, inArray } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+
+import {
+  user,
+  chat,
+  type User,
+  document,
+  type Suggestion,
+  suggestion,
+  type Message,
+  message,
+  vote,
+} from './schema';
+import { ArtifactKind } from '@/components/artifact';
+
+// Optionally, if not using email/pass login, you can
+// use the Drizzle adapter for Auth.js / NextAuth
+// https://authjs.dev/reference/adapter/drizzle
+
+// biome-ignore lint: Forbidden non-null assertion.
+const client = postgres(process.env.POSTGRES_URL!);
+const db = drizzle(client);
+
+export async function getUser(email: string): Promise<Array<User>> {
+  try {
+    return await db.select().from(user).where(eq(user.email, email));
+  } catch (error) {
+    console.error('Failed to get user from database');
+    throw error;
+  }
+}
+
+export async function createUser(email: string, password: string) {
+  const salt = genSaltSync(10);
+  const hash = hashSync(password, salt);
+
+  try {
+    return await db.insert(user).values({ email, password: hash });
+  } catch (error) {
+    console.error('Failed to create user in database');
+    throw error;
+  }
+}
+
+export async function saveChat({
+  id,
+  userId,
+  title,
+}: {
+  id: string;
+  userId: string;
+  title: string;
+}) {
+  try {
+    return await db.insert(chat).values({
+      id,
+      createdAt: new Date(),
+      userId,
+      title,
+    });
+  } catch (error) {
+    console.error('Failed to save chat in database');
+    throw error;
+  }
+}
+
+export async function deleteChatById({ id }: { id: string }) {
+  try {
+    await db.delete(vote).where(eq(vote.chatId, id));
+    await db.delete(message).where(eq(message.chatId, id));
+
+    return await db.delete(chat).where(eq(chat.id, id));
+  } catch (error) {
+    console.error('Failed to delete chat by id from database');
+    throw error;
+  }
+}
+
+export async function getChatsByUserId({ id }: { id: string }) {
+  try {
+    return await db
+      .select()
+      .from(chat)
+      .where(eq(chat.userId, id))
+      .orderBy(desc(chat.createdAt));
+  } catch (error) {
+    console.error('Failed to get chats by user from database');
+    throw error;
+  }
+}
+
+export async function getChatById({ id }: { id: string }) {
+  try {
+    const [selectedChat] = await db.select().from(chat).where(eq(chat.id, id));
+    return selectedChat;
+  } catch (error) {
+    console.error('Failed to get chat by id from database');
+    throw error;
+  }
+}
+
+export async function saveMessages({ messages }: { messages: Array<Message> }) {
+  try {
+    return await db.insert(message).values(messages);
+  } catch (error) {
+    console.error('Failed to save messages in database', error);
+    throw error;
+  }
+}
+
+export async function getMessagesByChatId({ id }: { id: string }) {
+  try {
+    return await db
+      .select()
+      .from(message)
+      .where(eq(message.chatId, id))
+      .orderBy(asc(message.createdAt));
+  } catch (error) {
+    console.error('Failed to get messages by chat id from database', error);
+    throw error;
+  }
+}
+
+export async function voteMessage({
+  chatId,
+  messageId,
+  type,
+}: {
+  chatId: string;
+  messageId: string;
+  type: 'up' | 'down';
+}) {
+  try {
+    const [existingVote] = await db
+      .select()
+      .from(vote)
+      .where(and(eq(vote.messageId, messageId)));
+
+    if (existingVote) {
+      return await db
+        .update(vote)
+        .set({ isUpvoted: type === 'up' })
+        .where(and(eq(vote.messageId, messageId), eq(vote.chatId, chatId)));
+    }
+    return await db.insert(vote).values({
+      chatId,
+      messageId,
+      isUpvoted: type === 'up',
+    });
+  } catch (error) {
+    console.error('Failed to upvote message in database', error);
+    throw error;
+  }
+}
+
+export async function getVotesByChatId({ id }: { id: string }) {
+  try {
+    return await db.select().from(vote).where(eq(vote.chatId, id));
+  } catch (error) {
+    console.error('Failed to get votes by chat id from database', error);
+    throw error;
+  }
+}
+
+export async function saveDocument({
+  id,
+  title,
+  kind,
+  content,
+  userId,
+}: {
+  id: string;
+  title: string;
+  kind: ArtifactKind;
+  content: string;
+  userId: string;
+}) {
+  try {
+    return await db.insert(document).values({
+      id,
+      title,
+      kind,
+      content,
+      userId,
+      createdAt: new Date(),
+    });
+  } catch (error) {
+    console.error('Failed to save document in database');
+    throw error;
+  }
+}
+
+export async function getDocumentsById({ id }: { id: string }) {
+  try {
+    const documents = await db
+      .select()
+      .from(document)
+      .where(eq(document.id, id))
+      .orderBy(asc(document.createdAt));
+
+    return documents;
+  } catch (error) {
+    console.error('Failed to get document by id from database');
+    throw error;
+  }
+}
+
+export async function getDocumentById({ id }: { id: string }) {
+  try {
+    const [selectedDocument] = await db
+      .select()
+      .from(document)
+      .where(eq(document.id, id))
+      .orderBy(desc(document.createdAt));
+
+    return selectedDocument;
+  } catch (error) {
+    console.error('Failed to get document by id from database');
+    throw error;
+  }
+}
+
+export async function deleteDocumentsByIdAfterTimestamp({
+  id,
+  timestamp,
+}: {
+  id: string;
+  timestamp: Date;
+}) {
+  try {
+    await db
+      .delete(suggestion)
+      .where(
+        and(
+          eq(suggestion.documentId, id),
+          gt(suggestion.documentCreatedAt, timestamp),
+        ),
+      );
+
+    return await db
+      .delete(document)
+      .where(and(eq(document.id, id), gt(document.createdAt, timestamp)));
+  } catch (error) {
+    console.error(
+      'Failed to delete documents by id after timestamp from database',
+    );
+    throw error;
+  }
+}
+
+export async function saveSuggestions({
+  suggestions,
+}: {
+  suggestions: Array<Suggestion>;
+}) {
+  try {
+    return await db.insert(suggestion).values(suggestions);
+  } catch (error) {
+    console.error('Failed to save suggestions in database');
+    throw error;
+  }
+}
+
+export async function getSuggestionsByDocumentId({
+  documentId,
+}: {
+  documentId: string;
+}) {
+  try {
+    return await db
+      .select()
+      .from(suggestion)
+      .where(and(eq(suggestion.documentId, documentId)));
+  } catch (error) {
+    console.error(
+      'Failed to get suggestions by document version from database',
+    );
+    throw error;
+  }
+}
+
+export async function getMessageById({ id }: { id: string }) {
+  try {
+    return await db.select().from(message).where(eq(message.id, id));
+  } catch (error) {
+    console.error('Failed to get message by id from database');
+    throw error;
+  }
+}
+
+export async function deleteMessagesByChatIdAfterTimestamp({
+  chatId,
+  timestamp,
+}: {
+  chatId: string;
+  timestamp: Date;
+}) {
+  try {
+    const messagesToDelete = await db
+      .select({ id: message.id })
+      .from(message)
+      .where(
+        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp)),
+      );
+
+    const messageIds = messagesToDelete.map((message) => message.id);
+
+    if (messageIds.length > 0) {
+      await db
+        .delete(vote)
+        .where(
+          and(eq(vote.chatId, chatId), inArray(vote.messageId, messageIds)),
+        );
+
+      return await db
+        .delete(message)
+        .where(
+          and(eq(message.chatId, chatId), inArray(message.id, messageIds)),
+        );
+    }
+  } catch (error) {
+    console.error(
+      'Failed to delete messages by id after timestamp from database',
+    );
+    throw error;
+  }
+}
+
+export async function updateChatVisiblityById({
+  chatId,
+  visibility,
+}: {
+  chatId: string;
+  visibility: 'private' | 'public';
+}) {
+  try {
+    return await db.update(chat).set({ visibility }).where(eq(chat.id, chatId));
+  } catch (error) {
+    console.error('Failed to update chat visibility in database');
+    throw error;
+  }
+}
+export async function updateDocumentInPlace({
+  id,
+  content,
+  userId,
+}: {
+  id: string;
+  content: string;
+  userId: string;
+}) {
+  try {
+    // Get the latest document version
+    const documents = await getDocumentsById({ id });
+    if (!documents.length) {
+      throw new Error("Document not found");
+    }
+    
+    // Get the most recent document
+    const latestDocument = documents[documents.length - 1];
+    
+    // Update only the content of the latest document
+    return await db
+      .update(document)
+      .set({ content })
+      .where(
+        and(
+          eq(document.id, id),
+          eq(document.createdAt, latestDocument.createdAt)
+        )
+      );
+  } catch (error) {
+    console.error('Failed to update document in place');
+    throw error;
+  }
+}'use client';
+
+import type {
+  Attachment,
+  ChatRequestOptions,
+  CreateMessage,
+  Message,
+} from 'ai';
+import { formatDistance } from 'date-fns';
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  type Dispatch,
+  memo,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
+import useSWR, { useSWRConfig } from 'swr';
+import { useDebounceCallback, useWindowSize } from 'usehooks-ts';
+import type { Document, Vote } from '@/lib/db/schema';
+import { fetcher } from '@/lib/utils';
+import { MultimodalInput } from './multimodal-input';
+import { Toolbar } from './toolbar';
+import { VersionFooter } from './version-footer';
+import { ArtifactActions } from './artifact-actions';
+import { ArtifactCloseButton } from './artifact-close-button';
+import { ArtifactMessages } from './artifact-messages';
+import { useSidebar } from './ui/sidebar';
+import { useArtifact } from '@/hooks/use-artifact';
+import { imageArtifact } from '@/artifacts/image/client';
+import { codeArtifact } from '@/artifacts/code/index';
+import { sheetArtifact } from '@/artifacts/sheet/client';
+import { textArtifact } from '@/artifacts/text/client';
+import equal from 'fast-deep-equal';
+import { Maximize2, Minimize2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+
+export const artifactDefinitions = [
+  textArtifact,
+  codeArtifact,
+  imageArtifact,
+  sheetArtifact,
+];
+
+export type ArtifactKind = (typeof artifactDefinitions)[number]['kind'];
+
+export interface UIArtifact {
+  id: string;
+  title: string;
+  documentId: string;
+  kind: ArtifactKind;
+  content: string;
+  isVisible: boolean;
+  status: 'streaming' | 'idle' | 'updating' | 'error';
+  boundingBox: {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  };
+  lastContent?: string;
+  currentContent?: string;
+  lastUpdateTime?: number;
+  isFullScreen?: boolean; // New property for full-screen mode
+}
+
+function PureArtifact({
+  chatId,
+  input,
+  setInput,
+  handleSubmit,
+  isLoading,
+  stop,
+  attachments,
+  setAttachments,
+  append,
+  messages,
+  setMessages,
+  reload,
+  votes,
+  isReadonly,
+}: {
+  chatId: string;
+  input: string;
+  setInput: (input: string) => void;
+  isLoading: boolean;
+  stop: () => void;
+  attachments: Array<Attachment>;
+  setAttachments: Dispatch<SetStateAction<Array<Attachment>>>;
+  messages: Array<Message>;
+  setMessages: Dispatch<SetStateAction<Array<Message>>>;
+  votes: Array<Vote> | undefined;
+  append: (
+    message: Message | CreateMessage,
+    chatRequestOptions?: ChatRequestOptions,
+  ) => Promise<string | null | undefined>;
+  handleSubmit: (
+    event?: { preventDefault?: () => void },
+    chatRequestOptions?: ChatRequestOptions,
+  ) => void;
+  reload: (chatRequestOptions?: ChatRequestOptions) => Promise<string | null | undefined>;
+  isReadonly: boolean;
+}) {
+  const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
+
+  // State for full-screen mode
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  const {
+    data: documents,
+    isLoading: isDocumentsFetching,
+    mutate: mutateDocuments,
+  } = useSWR<Array<Document>>(
+    artifact.documentId !== 'init'
+      ? `/api/document?id=${artifact.documentId}`
+      : null,
+    fetcher,
+    {
+      revalidateOnFocus: true,
+      refreshInterval: isLoading ? 500 : 1000, // More frequent refreshes during loading
+      refreshWhenHidden: false,
+      dedupingInterval: isLoading ? 200 : 1000, // Shorter deduping during loading
+    }
+  );
+
+  const [mode, setMode] = useState<'edit' | 'diff'>('edit');
+  const [document, setDocument] = useState<Document | null>(null);
+  const [currentVersionIndex, setCurrentVersionIndex] = useState(-1);
+  const { open: isSidebarOpen } = useSidebar();
+  const [isContentDirty, setIsContentDirty] = useState(false);
+  const [isToolbarVisible, setIsToolbarVisible] = useState(false);
+  const { width: windowWidth, height: windowHeight } = useWindowSize();
+  const isMobile = windowWidth ? windowWidth < 768 : false;
+
+  // Toggle full-screen mode
+  const toggleFullScreen = useCallback(() => {
+    const newFullScreenState = !isFullScreen;
+    setIsFullScreen(newFullScreenState);
+    
+    // If exiting full-screen mode and we have the metadata with flowInstance
+    if (!newFullScreenState && metadata?.flowInstance) {
+      // Wait for the animation to complete
+      setTimeout(() => {
+        console.log('Exiting fullscreen, triggering flow fit view');
+        
+        try {
+          // If metadata has the flowInstance with a fitView method, call it
+          if (metadata.flowInstance.fitView && typeof metadata.flowInstance.fitView === 'function') {
+            metadata.flowInstance.fitView({
+              padding: 0.4,
+              minZoom: 0.1,
+              maxZoom: 2,
+              duration: 300
+            });
+            console.log('Successfully called fitView on flow instance');
+          }
+        } catch (e) {
+          console.error('Error calling fitView:', e);
+        }
+        
+        // Also dispatch a window resize event which often helps components recalculate dimensions
+        window.dispatchEvent(new Event('resize'));
+      }, 500); // Wait for the animation to complete
+    }
+  }, [isFullScreen, metadata]);
+
+  // Enhanced reload function to ensure latest document is fetched and included in the request
+  const enhancedReload = useCallback(
+    async (chatRequestOptions?: ChatRequestOptions) => {
+      // First, explicitly fetch the latest document
+      if (artifact.documentId !== 'init') {
+        await mutateDocuments();
+        
+        // Get the most recent document content from the freshly updated documents
+        let latestContent = '';
+        if (documents && documents.length > 0) {
+          latestContent = documents[documents.length - 1].content || '';
+        } else {
+          latestContent = artifact.currentContent || artifact.content;
+        }
+        
+        // Include document content in the request body
+        const updatedOptions: ChatRequestOptions = {
+          ...chatRequestOptions,
+          data: {
+            ...(chatRequestOptions?.data || {}),
+            documentContent: latestContent,
+            documentId: artifact.documentId,
+            documentKind: artifact.kind,
+            documentTitle: artifact.title
+          }
+        };
+        
+        // Then proceed with the reload with document content
+        return reload(updatedOptions);
+      }
+      
+      // If no document, just reload normally
+      return reload(chatRequestOptions);
+    },
+    [artifact, documents, mutateDocuments, reload]
+  );
+
+  // Enhanced submit function to ensure latest document is fetched and included in the request
+  const enhancedHandleSubmit = useCallback(
+    async (event?: { preventDefault?: () => void }, chatRequestOptions?: ChatRequestOptions) => {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      
+      // Ensure we have the latest document before submitting
+      if (artifact.documentId !== 'init') {
+        await mutateDocuments();
+        
+        // Get the most recent document content from the freshly updated documents
+        let latestContent = '';
+        if (documents && documents.length > 0) {
+          latestContent = documents[documents.length - 1].content || '';
+        } else {
+          latestContent = artifact.currentContent || artifact.content;
+        }
+        
+        // Include document content in the request body
+        const updatedOptions: ChatRequestOptions = {
+          ...chatRequestOptions,
+          data: {
+            ...(chatRequestOptions?.data || {}),
+            documentContent: latestContent,
+            documentId: artifact.documentId,
+            documentKind: artifact.kind,
+            documentTitle: artifact.title
+          }
+        };
+        
+        // Then submit with document content
+        return handleSubmit(event, updatedOptions);
+      }
+      
+      // If no document, just submit normally
+      return handleSubmit(event, chatRequestOptions);
+    },
+    [artifact, documents, mutateDocuments, handleSubmit]
+  );
+
+  // Handle setting initial document and version
+  useEffect(() => {
+    if (documents && documents.length > 0) {
+      const mostRecentDocument = documents.at(-1);
+      if (mostRecentDocument) {
+        setDocument(mostRecentDocument);
+        setCurrentVersionIndex(documents.length - 1);
+        setArtifact((currentArtifact) => ({
+          ...currentArtifact,
+          content: mostRecentDocument.content ?? '',
+          currentContent: mostRecentDocument.content ?? '',
+          lastUpdateTime: new Date(mostRecentDocument.createdAt).getTime()
+        }));
+      }
+    }
+  }, [documents, setArtifact]);
+
+  // Sync content changes between views
+  useEffect(() => {
+    if (artifact.lastContent && artifact.lastContent !== artifact.content) {
+      setArtifact(current => ({
+        ...current,
+        content: artifact.lastContent ?? '',
+        currentContent: artifact.lastContent ?? ''
+      }));
+    }
+  }, [artifact.lastContent, artifact.content, setArtifact]);
+
+  // Trigger document refresh when artifact status changes
+  useEffect(() => {
+    mutateDocuments();
+  }, [artifact.status, mutateDocuments]);
+
+  // Add document synchronization effect that runs when messages change
+  useEffect(() => {
+    // Whenever messages change, ensure we have latest document
+    if (artifact.documentId !== 'init' && messages.length > 0) {
+      mutateDocuments();
+    }
+  }, [messages, artifact.documentId, mutateDocuments]);
+
+  const { mutate } = useSWRConfig();
+
+  const handleContentChange = useCallback(
+    (updatedContent: string) => {
+      if (!artifact) return;
+
+      mutate<Array<Document>>(
+        `/api/document?id=${artifact.documentId}`,
+        async (currentDocuments) => {
+          if (!currentDocuments) return undefined;
+          const currentDocument = currentDocuments.at(-1);
+          if (!currentDocument || !currentDocument.content) {
+            setIsContentDirty(false);
+            return currentDocuments;
+          }
+
+          if (currentDocument.content !== updatedContent) {
+            try {
+              setArtifact(current => ({
+                ...current,
+                status: 'updating'
+              }));
+
+              await fetch(`/api/document?id=${artifact.documentId}`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  title: artifact.title,
+                  content: updatedContent,
+                  kind: artifact.kind,
+                }),
+              });
+
+              setIsContentDirty(false);
+              
+              const newDocument = {
+                ...currentDocument,
+                content: updatedContent,
+                createdAt: new Date().toISOString()
+              };
+
+              setArtifact(current => ({
+                ...current,
+                content: updatedContent,
+                currentContent: updatedContent,
+                lastContent: updatedContent,
+                lastUpdateTime: Date.now(),
+                status: 'idle'
+              }));
+
+              return [...currentDocuments, newDocument];
+            } catch (error) {
+              console.error('Error saving content:', error);
+              setArtifact(current => ({
+                ...current,
+                status: 'error'
+              }));
+              return currentDocuments;
+            }
+          }
+          return currentDocuments;
+        },
+        { revalidate: false },
+      );
+    },
+    [artifact, mutate, setArtifact],
+  );
+
+  const debouncedHandleContentChange = useDebounceCallback(handleContentChange, 2000);
+
+  const saveContent = useCallback(
+    (updatedContent: string, debounce: boolean) => {
+      if (document && updatedContent !== document.content) {
+        setIsContentDirty(true);
+        if (debounce) {
+          debouncedHandleContentChange(updatedContent);
+        } else {
+          handleContentChange(updatedContent);
+        }
+      }
+    },
+    [document, debouncedHandleContentChange, handleContentChange],
+  );
+
+  function getDocumentContentById(index: number) {
+    if (!documents) return '';
+    if (!documents[index]) return '';
+    return documents[index].content ?? '';
+  }
+
+  const handleVersionChange = (type: 'next' | 'prev' | 'toggle' | 'latest') => {
+    if (!documents) return;
+    if (type === 'latest') {
+      setCurrentVersionIndex(documents.length - 1);
+      setMode('edit');
+    }
+    if (type === 'toggle') {
+      setMode((mode) => (mode === 'edit' ? 'diff' : 'edit'));
+    }
+    if (type === 'prev') {
+      if (currentVersionIndex > 0) {
+        setCurrentVersionIndex((index) => index - 1);
+      }
+    } else if (type === 'next') {
+      if (currentVersionIndex < documents.length - 1) {
+        setCurrentVersionIndex((index) => index + 1);
+      }
+    }
+  };
+
+  const isCurrentVersion =
+    documents && documents.length > 0
+      ? currentVersionIndex === documents.length - 1
+      : true;
+
+  const artifactDefinition = artifactDefinitions.find(
+    (definition) => definition.kind === artifact.kind,
+  );
+
+  if (!artifactDefinition) {
+    throw new Error('Artifact definition not found!');
+  }
+
+  useEffect(() => {
+    if (artifact.documentId !== 'init') {
+      if (artifactDefinition.initialize) {
+        artifactDefinition.initialize({
+          documentId: artifact.documentId,
+          setMetadata,
+          setArtifact,
+        });
+      }
+    }
+  }, [artifact.documentId, artifactDefinition, setMetadata, setArtifact]);
+
+  return (
+    <AnimatePresence>
+      {artifact.isVisible && (
+        <motion.div
+          className="flex flex-row h-dvh w-dvw fixed top-0 left-0 z-50"
+          initial={{ opacity: 1 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0, transition: { delay: 0.4 } }}
+        >
+          {/* Left panel with messages - hide in full-screen mode */}
+          {!isMobile && !isFullScreen && (
+            <motion.div
+              className="fixed bg-background h-dvh"
+              initial={{
+                width: isSidebarOpen ? windowWidth - 256 : windowWidth,
+                right: 0,
+              }}
+              animate={{ width: windowWidth, right: 0 }}
+              exit={{
+                width: isSidebarOpen ? windowWidth - 256 : windowWidth,
+                right: 0,
+              }}
+            />
+          )}
+
+          {/* Chat messages panel - hide in full-screen mode */}
+          {!isMobile && !isFullScreen && (
+            <motion.div
+              className="relative w-[400px] bg-muted dark:bg-background h-dvh shrink-0 border-r border-zinc-800"
+              initial={{ opacity: 0, x: 10, scale: 1 }}
+              animate={{
+                opacity: 1,
+                x: 0,
+                scale: 1,
+                transition: { delay: 0.2, type: 'spring', stiffness: 200, damping: 30 },
+              }}
+              exit={{ opacity: 0, x: 0, scale: 1, transition: { duration: 0 } }}
+            >
+              <AnimatePresence>
+                {!isCurrentVersion && (
+                  <motion.div
+                    className="left-0 absolute h-dvh w-[400px] top-0 bg-zinc-700/50 z-50"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                  />
+                )}
+              </AnimatePresence>
+
+              <div className="flex flex-col h-full justify-between items-center gap-4">
+                <ArtifactMessages
+                  chatId={chatId}
+                  isLoading={isLoading}
+                  votes={votes}
+                  messages={messages}
+                  setMessages={setMessages}
+                  reload={enhancedReload}
+                  isReadonly={isReadonly}
+                  artifactStatus={artifact.status}
+                />
+
+                <form className="flex flex-row gap-2 relative items-end w-full px-2 pb-4">
+                  <MultimodalInput
+                    chatId={chatId}
+                    input={input}
+                    setInput={setInput}
+                    handleSubmit={enhancedHandleSubmit}
+                    isLoading={isLoading}
+                    stop={stop}
+                    attachments={attachments}
+                    setAttachments={setAttachments}
+                    messages={messages}
+                    append={append}
+                    className="bg-background dark:bg-muted"
+                    setMessages={setMessages}
+                  />
+                </form>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Artifact content panel - adjust for full-screen mode */}
+          <motion.div
+            className="fixed h-dvh flex flex-col overflow-y-scroll border-zinc-200= bg-background dark:bg-background"
+            initial={
+              isMobile
+                ? {
+                  opacity: 1,
+                  x: artifact.boundingBox.left,
+                  y: artifact.boundingBox.top,
+                  height: artifact.boundingBox.height,
+                  width: artifact.boundingBox.width,
+                  borderRadius: 50,
+                }
+                : {
+                  opacity: 1,
+                  x: artifact.boundingBox.left,
+                  y: artifact.boundingBox.top,
+                  height: artifact.boundingBox.height,
+                  width: artifact.boundingBox.width,
+                  borderRadius: 50,
+                }
+            }
+            animate={
+              isMobile
+                ? {
+                  opacity: 1,
+                  x: 0,
+                  y: 0,
+                  height: windowHeight,
+                  width: windowWidth,
+                  borderRadius: 0,
+                  transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
+                }
+                : isFullScreen
+                  ? {
+                    opacity: 1,
+                    x: 0,
+                    y: 0,
+                    height: windowHeight,
+                    width: windowWidth,
+                    borderRadius: 0,
+                    transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
+                  }
+                  : {
+                    opacity: 1,
+                    x: 400,
+                    y: 0,
+                    height: windowHeight,
+                    width: windowWidth - 400,
+                    borderRadius: 0,
+                    transition: { delay: 0, type: 'spring', stiffness: 200, damping: 30 },
+                  }
+            }
+            exit={{
+              opacity: 0,
+              scale: 0.5,
+              transition: { delay: 0.1, type: 'spring', stiffness: 600, damping: 30 },
+            }}
+          >
+            <div className="p-1 flex flex-row justify-between items-start bg-background dark:bg-background">
+              <div className="flex flex-row gap-2 items-start">
+                <ArtifactCloseButton />
+                <div className="flex flex-col">
+                  {isContentDirty ? (
+                    <div className="text-sm text-muted-foreground">Saving changes...</div>
+                  ) : document?.createdAt ? (
+                    <div className="text-sm text-muted-foreground">
+                      {(() => {
+                        try {
+                          const updateDate = new Date(document.createdAt);
+                          if (isNaN(updateDate.getTime())) {
+                            return 'Recently updated';
+                          }
+                          return `Updated ${formatDistance(updateDate, new Date(), {
+                            addSuffix: true,
+                          })}`;
+                        } catch (error) {
+                          return 'Recently updated';
+                        }
+                      })()}
+                    </div>
+                  ) : (
+                    <div className="w-32 h-3 mt-2 bg-muted-foreground/20 rounded-md animate-pulse" />
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 bg-background dark:bg-background">
+                {/* Full-screen toggle button */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleFullScreen}
+                  title={isFullScreen ? "Exit full screen" : "Full screen"}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  {isFullScreen ? (
+                    <Minimize2 className="h-4 w-4" />
+                  ) : (
+                    <Maximize2 className="h-4 w-4" />
+                  )}
+                </Button>
+
+                <ArtifactActions
+                  artifact={artifact}
+                  currentVersionIndex={currentVersionIndex}
+                  handleVersionChange={handleVersionChange}
+                  isCurrentVersion={isCurrentVersion}
+                  mode={mode}
+                  metadata={metadata}
+                  setMetadata={setMetadata}
+                />
+              </div>
+            </div>
+
+            <div className="h-full overflow-y-scroll items-center bg-background dark:bg-background">
+              <artifactDefinition.content
+                title={artifact.title}
+                content={
+                  isCurrentVersion
+                    ? artifact.currentContent || artifact.content
+                    : getDocumentContentById(currentVersionIndex)
+                }
+                mode={mode}
+                status={artifact.status}
+                currentVersionIndex={currentVersionIndex}
+                suggestions={[]}
+                onSaveContent={saveContent}
+                isInline={false}
+                isCurrentVersion={isCurrentVersion}
+                getDocumentContentById={getDocumentContentById}
+                isLoading={isDocumentsFetching && !artifact.content}
+                metadata={metadata}
+                setMetadata={setMetadata}
+                document={document}
+              />
+
+              <AnimatePresence>
+                {isCurrentVersion && (
+                  <Toolbar
+                    isToolbarVisible={isToolbarVisible}
+                    setIsToolbarVisible={setIsToolbarVisible}
+                    append={append}
+                    isLoading={isLoading}
+                    stop={stop}
+                    setMessages={setMessages}
+                    artifactKind={artifact.kind}
+                  />
+                )}
+              </AnimatePresence>
+            </div>
+
+            <AnimatePresence>
+              {!isCurrentVersion && (
+                <VersionFooter
+                  currentVersionIndex={currentVersionIndex}
+                  documents={documents}
+                  handleVersionChange={handleVersionChange}
+                />
+              )}
+            </AnimatePresence>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+export const Artifact = memo(PureArtifact, (prevProps, nextProps) => {
+  if (prevProps.isLoading !== nextProps.isLoading) return false;
+  if (!equal(prevProps.votes, nextProps.votes)) return false;
+  if (prevProps.input !== nextProps.input) return false;
+  if (!equal(prevProps.messages, nextProps.messages)) return false;
+  return true;
+});
+
+Artifact.displayName = 'Artifact';
+export default Artifact;'use server';
+
+import { z } from 'zod';
+
+import { createUser, getUser } from '@/lib/db/queries';
+
+import { signIn } from './auth';
+
+const authFormSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+});
+
+export interface LoginActionState {
+  status: 'idle' | 'in_progress' | 'success' | 'failed' | 'invalid_data';
+}
+
+export const login = async (
+  _: LoginActionState,
+  formData: FormData,
+): Promise<LoginActionState> => {
+  try {
+    const validatedData = authFormSchema.parse({
+      email: formData.get('email'),
+      password: formData.get('password'),
+    });
+
+    await signIn('credentials', {
+      email: validatedData.email,
+      password: validatedData.password,
+      redirect: false,
+    });
+
+    return { status: 'success' };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return { status: 'invalid_data' };
+    }
+
+    return { status: 'failed' };
+  }
+};
+
+export interface RegisterActionState {
+  status:
+    | 'idle'
+    | 'in_progress'
+    | 'success'
+    | 'failed'
+    | 'user_exists'
+    | 'invalid_data';
+}
+
+export const register = async (
+  _: RegisterActionState,
+  formData: FormData,
+): Promise<RegisterActionState> => {
+  try {
+    const validatedData = authFormSchema.parse({
+      email: formData.get('email'),
+      password: formData.get('password'),
+    });
+
+    const [user] = await getUser(validatedData.email);
+
+    if (user) {
+      return { status: 'user_exists' } as RegisterActionState;
+    }
+    await createUser(validatedData.email, validatedData.password);
+    await signIn('credentials', {
+      email: validatedData.email,
+      password: validatedData.password,
+      redirect: false,
+    });
+
+    return { status: 'success' };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return { status: 'invalid_data' };
+    }
+
+    return { status: 'failed' };
+  }
+};
+// ======================================================
+// File: /lib/ai/prompts.ts
+// ======================================================
+import { ArtifactKind } from '@/components/artifact';
+
+const actInstructions = `
+You are an ACT agent expert. When creating or modifying ACT files:
+
+WORKFLOW ACT STRUCTURE
+====================
+1. Include at least 10 to 20 nodes or more IF needed to represent a comprehensive workflow based on the description.
+2. Use various node shapes to represent different types of steps (e.g., rectangles for processes, diamonds for decisions).
+3. Include detailed labels for each node and edge.
+4. Represent complex logic with multiple paths and decision points.
+5. Include any loops or repetitions in the process.
+6. Add annotations or subgraphs if appropriate to group related steps.
+7. Follow a clear and logical flow from start to finish.
+8. When we need to use an API, specify the API name and the method to use.
+9. Each node represents a specific operation or decision in the workflow.
+10. Incorporate conditional statements (if/elif) for making decisions based on project type or AI recommendations.
+11. Include loops (for) for iterating through recommended tools or document structures.
+12. Implement error handling to manage exceptions and retry failed steps.
+
+REQUIRED SECTIONS
+-------------------
+[workflow]
+workflow_id = "\${EXISTING_ID}"    # Must preserve existing ID
+name = "Workflow Name"            # Optional workflow name
+description = "Description"       # Optional workflow description
+start_node = "StartNodeID"        # Required: First node in execution chain
+
+NODE DEFINITIONS
+-----------------
+[node:\${NODE_ID}]
+label = "\${APP_NAME}"
+position_x = \${X}
+position_y = \${Y}
+operation = "\${OP}"
+node_type =Node type OR "\${APP_NAME}" 
+operation_name = "\${OP_NAME}"
+params = \${PARAMS}
+mode = "UC"
+
+Additional node parameters:
+- api_key = "\${API_KEY}"
+- slack_token = "\${TOKEN}"
+- method = "\${METHOD}"
+- formData = \${FORM_DATA}
+
+EDGE CONNECTIONS
+-----------------
+[edges]
+source_node = target_node
+
+ENVIRONMENT VARIABLES
+-------------------
+[env]
+VARIABLE_NAME = \${VALUE}
+
+CRITICAL RULES
+============
+1. Data Integrity: Ensure all required fields are present and properly formatted
+3. Data Flow: Validate edge connections between nodes
+4. Response Format: Follow exact INI format structure
+
+NAMING CONVENTIONS
+================
+1. Node IDs: lowercase with underscores
+2. Environment Variables: UPPERCASE with underscores
+3. Parameters: camelCase for JSON keys`;
+
+export const artifactsPrompt = `
+Artifacts is a special user interface mode that helps users with writing, editing, and other content creation tasks. When artifact is open, it is on the right side of the screen, while the conversation is on the left side. When creating or updating documents, changes are reflected in real-time on the artifacts and visible to the user.
+
+When asked to write ACT configuration files, always use artifacts. Use the exact format specified in the ACT file instructions.
+
+DO NOT UPDATE DOCUMENTS IMMEDIATELY AFTER CREATING THEM. WAIT FOR USER FEEDBACK OR REQUEST TO UPDATE IT.
+WORKFLOW ACT STRUCTURE
+====================
+1. Include at least 10 to 20 nodes or more IF needed to represent a comprehensive workflow based on the description.
+2. Use various node shapes to represent different types of steps (e.g., rectangles for processes, diamonds for decisions).
+3. Include detailed labels for each node and edge.
+4. Represent complex logic with multiple paths and decision points.
+5. Include any loops or repetitions in the process.
+6. Add annotations or subgraphs if appropriate to group related steps.
+7. Follow a clear and logical flow from start to finish.
+8. When we need to use an API, specify the API name and the method to use.
+9. Each node represents a specific operation or decision in the workflow.
+10. Incorporate conditional statements (if/elif) for making decisions based on project type or AI recommendations.
+11. Include loops (for) for iterating through recommended tools or document structures.
+12. Implement error handling to manage exceptions and retry failed steps.
+
+**When to use \`createDocument\`:**
+- For ACT workflow configurations
+- When explicitly requested to create a workflow
+- When content follows ACT file format
+
+**When NOT to use \`createDocument\`:**
+- For explanatory content
+- For conversational responses
+- When asked to keep it in chat
+
+**Using \`updateDocument\`:**
+- Default to full document rewrites for major workflow changes
+- Use targeted updates only for specific node modifications
+- Follow user instructions for which parts to modify
+- Preserve existing workflow_id
+
+**When NOT to use \`updateDocument\`:**
+- Immediately after creating a document
+- For simple text changes or comments
+`;
+
+export const regularPrompt =
+  'You are a friendly assistant! Keep your responses concise and helpful.';
+
+export const systemPrompt = ({
+  selectedChatModel,
+}: {
+  selectedChatModel: string;
+}) => {
+  if (selectedChatModel === 'chat-model-reasoning') {
+    return regularPrompt;
+  } else {
+    return `${regularPrompt}\n\n${artifactsPrompt}`;
+  }
+};
+
+export const codePrompt = `
+You are an ACT workflow configuration generator. ${actInstructions}
+
+Example workflow:
+[workflow]
+name = "Example Workflow"
+description = "A workflow to process data and send notifications"
+start_node = "input_validation"
+
+[node:input_validation]
+label = "Validate Input"
+position_x = 100
+position_y = 100
+operation = "validation"
+node_type = Node type
+operation_name = "validateData"
+params = {"required_fields": ["name", "email"], "max_size": 1024}
+mode = "UC"
+
+[node:process_data]
+label = "Process Data"
+position_x = 300
+position_y = 100
+operation = "transform"
+node_type = Node type
+operation_name = "processData"
+params = {"format": "json", "compression": true}
+mode = "UC"
+
+[node:send_notification]
+label = "Send Notification"
+position_x = 500
+position_y = 100
+operation = "notification"
+node_type = Node type
+operation_name = "sendEmail"
+params = {"template": "result_template", "retry_count": 3}
+mode = "UC"
+
+[edges]
+input_validation = process_data
+process_data = send_notification
+
+[env]
+API_KEY = "\${API_KEY}"
+NOTIFICATION_SERVICE = "email"
+`;
+
+export const updateDocumentPrompt = (
+  currentContent: string | null,
+  type: ArtifactKind,
+) =>
+  type === 'code'
+    ? `\
+Update the following ACT workflow configuration based on the given prompt.
+Preserve the existing workflow_id if present.
+Maintain proper positioning and connections.
+
+Current configuration:
+${currentContent}
+
+${actInstructions}
+`
+    : '';import { generateUUID } from '@/lib/utils';
+import { DataStreamWriter, tool } from 'ai';
+import { z } from 'zod';
+import { Session } from 'next-auth';
+import {
+  artifactKinds,
+  documentHandlersByArtifactKind,
+} from '@/lib/artifacts/server';
+
+interface CreateDocumentProps {
+  session: Session;
+  dataStream: DataStreamWriter;
+}
+
+export const createDocument = ({ session, dataStream }: CreateDocumentProps) =>
+  tool({
+    description:
+      'Create a document for a writing or content creation activities. This tool will call other functions that will generate the contents of the document based on the title and kind.',
+    parameters: z.object({
+      title: z.string(),
+      kind: z.enum(artifactKinds),
+    }),
+    execute: async ({ title, kind }) => {
+      const id = generateUUID();
+
+      dataStream.writeData({
+        type: 'kind',
+        content: kind,
+      });
+
+      dataStream.writeData({
+        type: 'id',
+        content: id,
+      });
+
+      dataStream.writeData({
+        type: 'title',
+        content: title,
+      });
+
+      dataStream.writeData({
+        type: 'clear',
+        content: '',
+      });
+
+      const documentHandler = documentHandlersByArtifactKind.find(
+        (documentHandlerByArtifactKind) =>
+          documentHandlerByArtifactKind.kind === kind,
+      );
+
+      if (!documentHandler) {
+        throw new Error(`No document handler found for kind: ${kind}`);
+      }
+
+      await documentHandler.onCreateDocument({
+        id,
+        title,
+        dataStream,
+        session,
+      });
+
+      dataStream.writeData({ type: 'finish', content: '' });
+
+      return {
+        id,
+        title,
+        kind,
+        content: 'A document was created and is now visible to the user.',
+      };
+    },
+  });
+import { z } from 'zod';
+import { streamObject } from 'ai';
+import { myProvider } from '@/lib/ai/models';
+import { createDocumentHandler } from '@/lib/artifacts/server';
+
+// ACT Workflow Structure and Guidelines
+const ACT_STRUCTURE_PROMPT = `
+AUTONOMOUS AGENT SYSTEM STRUCTURE
+====================
+1. Include at least 10 to 15 agent nodes or more IF needed to represent a comprehensive autonomous system based on the description.
+2. Use various node shapes to represent different types of autonomous agents (e.g., rectangles for processing agents, diamonds for decision-making agents).
+3. Include highly detailed labels for each agent node. Each label must explain:
+   - WHAT the agent does in specific terms
+   - WHY this agent is necessary in the system
+   - HOW the agent processes its inputs
+   - WHAT outputs the agent produces
+   - Any SPECIAL CONDITIONS the agent handles
+4. Represent complex agent logic with multiple decision paths and autonomous reasoning points.
+5. Include any feedback loops or iterative processing where agents may repeatedly perform tasks.
+6. Add annotations or subgraphs if appropriate to group related autonomous agents.
+7. Follow a clear and logical flow from initiating agent to completion agents.
+8. When an agent needs to interact with an external API, specify the API name and the exact method to use.
+9. Each agent node represents a specific autonomous operation or decision in the system.
+10. Incorporate conditional reasoning agents (if/elif) for making autonomous decisions based on project type or AI recommendations.
+11. Include iteration agents (for) for autonomously processing through recommended tools or document structures.
+12. Implement error recovery agents to autonomously manage exceptions and retry failed operations.
+
+REQUIRED SECTIONS
+-------------------
+[workflow]
+workflow_id = "\${EXISTING_ID}"    # Must preserve existing ID
+name = "Agent System Name"        # Required system name
+description = "Description"       # Required system description
+start_node = "StartNodeID"        # Required: First agent in execution chain
+
+
+Reference Agent Types:
+√SwitchNode - Autonomous routing agent that directs based on matching a value to different cases
+BranchNode - Decision-making agent that routes execution along different paths based on conditions
+MergeNode - Integration agent that combines outputs from multiple autonomous processing branches
+SequenceNode - Orchestration agent that coordinates a series of operations in order
+ParallelNode - Concurrent processing agent that executes multiple operations simultaneously
+LoopNode - Repetition agent that continues execution until a condition is met
+ForEachNode - Collection processing agent that applies an operation to each item in a collection
+MapNode - Transformation agent that processes each element in a collection independently
+FilterNode - Selection agent that identifies and extracts elements matching specific criteria
+ReduceNode - Aggregation agent that combines values from a collection into a single result
+TryCatchNode - Resilience agent that handles errors with fallback execution paths
+RetryNode - Persistence agent that reattempts an operation with backoff strategies
+ThrottleNode - Rate-limiting agent that controls execution frequency
+DelayNode - Timing agent that introduces deliberate pauses in execution
+TimeoutNode - Monitoring agent that enforces maximum execution times
+QueueNode - Prioritization agent that manages execution order based on importance
+DependencyNode - Coordination agent that executes based on prerequisites being satisfied
+SemaphoreNode - Resource management agent that controls access to limited resources
+ObserverNode - Monitoring agent that watches for changes and triggers responses
+PublishSubscribeNode - Communication agent that implements pub/sub pattern for event distribution
+AggregatorNode - Collection agent that combines multiple values into structured data
+JoinNode - Synchronization agent that aligns multiple execution paths
+SplitNode - Distribution agent that divides execution into multiple parallel paths
+ValidatorNode - Quality assurance agent that verifies data meets required conditions
+TransformerNode - Conversion agent that transforms data between formats
+RouterNode - Intelligent routing agent that directs data based on complex rules
+GatewayNode - Access control agent that governs passage of data based on conditions
+ForkNode - Replication agent that creates multiple copies of the same execution path
+SynchronizerNode - Timing coordination agent that ensures operations happen in sequence
+StateNode - Context management agent that tracks and transitions between different states
+RuleEngineNode - Policy enforcement agent that processes complex rule sets against data
+DecisionTreeNode - Hierarchical reasoning agent that makes decisions based on structured conditions
+PipelineNode - Process management agent that organizes operations into sequential stages
+CompositeNode - Meta-agent that groups multiple specialized agents into a single logical unit
+PriorityNode - Judgment agent that executes branches based on importance
+InterruptNode - Control agent that halts execution based on specific conditions
+ConditionalLoopNode - Adaptive iteration agent with custom entry and exit conditions
+GroupByNode - Classification agent that organizes data into groups based on key attributes
+SortNode - Ordering agent that arranges elements according to specified criteria
+LimitNode - Constraint agent that restricts the number of items processed
+BatchNode - Efficient processing agent that handles items in fixed-size groups
+WindowNode - Time-aware agent that processes items in sliding time windows
+DebounceNode - Efficiency agent that prevents duplicate processing within a time window
+CorrelationNode - Pattern-matching agent that identifies related events or data
+PredicateNode - Logical evaluation agent that assesses complex expressions
+TokenBucketNode - Flow control agent that rate limits operations
+CircuitBreakerNode - Protective agent that prevents operations when failure rate is high
+AnyNode - Outcome agent that succeeds if any child agent succeeds
+AllNode - Consensus agent that succeeds if all child agents succeed
+CascadeNode - Fallback agent that attempts operations in sequence until one succeeds
+
+
+AGENT NODE DEFINITIONS
+-----------------
+[node:\${NODE_ID}]
+type = "\${NODE_TYPE}"           # Required: Agent type (e.g., "ValidatorNode", "LimitNode", "GroupByNode", "SlackNode", "GitHubNode")
+label = "\${DETAILED_LABEL}"     # Required: Comprehensive explanation of the agent's purpose, inputs, processing logic, and outputs
+position_x = \${X}               # Required: X position
+position_y = \${Y}               # Required: Y position
+operation = "\${OP}"             # Required: Operation the agent performs
+app_name = "\${APP_NAME}"        # Required: Application name (e.g., "GitHub", "Slack") if API is used, otherwise "logic" for system agents
+operation_name = "\${OP_NAME}"   # Required: Specific operation name
+params = \${PARAMS}              # Required: Operation parameters and configuration
+mode = "UC"                      # Required: Mode (usually "UC")
+
+Additional agent parameters:
+- api_key = "\${API_KEY}"        # Optional: API key if needed for external service access
+- slack_token = "\${TOKEN}"      # Optional: Slack token if needed for communication
+- method = "\${METHOD}"          # Optional: HTTP method if agent performs web requests
+- formData = \${FORM_DATA}       # Optional: Form data if agent submits structured information
+
+AGENT CONNECTIONS
+-----------------
+[edges]
+source_agent = target_agent
+
+ENVIRONMENT VARIABLES
+-------------------
+[env]
+VARIABLE_NAME = \${VALUE}
+
+CRITICAL RULES
+============
+1. Data Integrity: Ensure all required fields are present and properly formatted
+2. Agent Types: Each agent node MUST have a 'type' 
+3. App Names: Each agent node MUST have an 'app_name' field
+4. Data Flow: Validate edge connections between autonomous agents
+5. Response Format: Follow exact INI format structure
+6. Label Detail: Every agent must have a detailed, comprehensive label explaining its purpose, function, and role
+
+EDGES RULES
+============
+1.  Edge definitions MUST follow this exact format:
+   [edges]
+   actual_source_node_id = actual_target_node_id
+2. NEVER use literal strings like "source_node" or "target_node"
+   INCORRECT: source_node = target_node
+   CORRECT: start = get_pr_details
+
+3. All edge connections must reference actual agent node IDs defined in the system
+4. Each edge must be on its own line under the [edges] section
+5. Ensure all edge connections are valid and logical
+NAMING CONVENTIONS
+================
+1. Node IDs: lowercase with underscores
+2. Environment Variables: UPPERCASE with underscores
+3. Parameters: camelCase for JSON keys
+4. Node Types: lowercase (start, process, end, error, decision)
+5. App Names: PascalCase (GitHub, Slack, OpenAI)
+
+LAYOUT ALGORITHM REQUIREMENTS
+============================
+1. Position agent nodes in a logical flow-chart pattern from top to bottom and left to right
+2. Each agent node has a size of 130x130 pixels
+3. Start agent should be positioned at the top (lowest y value)
+4. End agent should be positioned at the bottom (highest y value)
+5. Maintain a minimum horizontal spacing of 250 pixels between agent node centers (220 pixels clear space)
+6. Maintain a minimum vertical spacing of 200 pixels between agent node centers (270 pixels clear space)
+7. Position agent nodes based on their logical sequence in the autonomous system
+8. Decision agent nodes should have their conditional paths positioned appropriately:
+   - "Yes" or "True" paths should flow downward or to the right
+   - "No" or "False" paths should flow to a different direction
+9. Group related agent nodes by positioning them in proximity to each other 200 pixels apart
+10. Error handler agent nodes should be positioned at the bottom of the diagram
+11. All coordinates must be positive integers
+12. Sequential agent nodes should form clear paths without overlapping
+
+`
+
+;
+
+
+
+// Artifacts UI Guidelines
+const ARTIFACTS_PROMPT = `
+Artifacts is a special user interface mode that helps users with writing, editing, and other content creation tasks. When artifact is open, it is on the right side of the screen, while the conversation is on the left side.
+
+When asked to write ACT configuration files, always use artifacts. Use the exact format specified in the ACT file instructions.
+
+DO NOT UPDATE DOCUMENTS IMMEDIATELY AFTER CREATING THEM. WAIT FOR USER FEEDBACK OR REQUEST TO UPDATE IT.`;
+
+// Combined system prompts
+const SYSTEM_PROMPTS = {
+  create: `${ACT_STRUCTURE_PROMPT}\n\n${ARTIFACTS_PROMPT}\n\nAdditional Create Guidelines:
+1. Always generate complete, valid autonomous agent configurations
+2. Include comprehensive error recovery mechanisms
+3. Follow naming conventions strictly
+4. Position agent nodes logically
+5. Ensure proper agent connections
+6. Provide highly detailed labels for each agent that explain WHAT it does, WHY it's needed, and HOW it processes information`,
+
+  update: `${ACT_STRUCTURE_PROMPT}\n\n${ARTIFACTS_PROMPT}\n\nAdditional Update Guidelines:
+1. Preserve existing workflow_id
+2. Maintain autonomous system integrity
+3. Keep existing agent connections valid
+4. Update only necessary agent configurations
+5. Validate all changes
+6. Enhance agent labels with detailed explanations of purpose and function`
+};
+
+// Schema definitions
+const actWorkflowSchema = z.object({
+  workflow: z.object({
+    workflow_id: z.string().optional(),
+    name: z.string(),
+    description: z.string(),
+    start_node: z.string()
+  }),
+  nodes: z.record(z.object({
+    type: z.string(),              // Required node type
+    label: z.string(),
+    position_x: z.number(),
+    position_y: z.number(),
+    operation: z.string(),
+    app_name: z.string(),          // Required app name
+    operation_name: z.string(),
+    params: z.record(z.any()),
+    mode: z.string(),
+    api_key: z.string().optional(),
+    slack_token: z.string().optional(),
+    method: z.string().optional(),
+    formData: z.record(z.any()).optional()
+  })),
+  edges: z.array(z.object({
+    source: z.string(),
+    target: z.string()
+  })).default([]),
+  env: z.record(z.string()).default({})
+});
+
+// ACT Validator Class
+class ActValidator {
+  private content: string;
+  private debug: boolean;
+  
+  constructor(content: string, debug: boolean = false) {
+    this.content = content;
+    this.debug = debug;
+  }
+
+  parseContent() {
+    const sections: Record<string, any> = {
+      workflow: {
+        name: '',
+        description: '',
+        start_node: ''
+      },
+      nodes: {},
+      edges: [],
+      env: {}
+    };
+    
+    let currentSection = '';
+    let currentNodeId = '';
+    
+    const lines = this.content.split('\n').map(line => line.trim());
+    
+    // Debug the content being parsed
+    if (this.debug) {
+      console.log('Content to parse:', this.content.substring(0, 200) + '...');
+      console.log('Number of lines:', lines.length);
+    }
+    
+    for (const line of lines) {
+      if (line === '' || line.startsWith('#')) continue;
+
+      // Debug each line processing
+      if (this.debug) {
+        console.log(`Processing line: "${line}"`);
+      }
+
+      if (line.startsWith('[') && line.endsWith(']')) {
+        currentSection = line.slice(1, -1);
+        if (this.debug) {
+          console.log(`Section changed to: "${currentSection}"`);
+        }
+        
+        if (currentSection.startsWith('node:')) {
+          currentNodeId = currentSection.split(':')[1].trim();
+          if (this.debug) {
+            console.log(`Node ID detected: "${currentNodeId}"`);
+          }
+          
+          if (!sections.nodes[currentNodeId]) {
+            sections.nodes[currentNodeId] = {
+              id: currentNodeId,
+              type: 'process',          // Default type
+              app_name: 'System',       // Default app name
+              label: currentNodeId,
+              position_x: 0,
+              position_y: 0,
+              operation: '',
+              operation_name: '',
+              params: {},
+              mode: 'UC'
+            };
+          }
+        }
+        continue;
+      }
+
+      // Only process lines with equals sign for key-value pairs
+      if (line.includes('=')) {
+        const equalsIndex = line.indexOf('=');
+        const key = line.substring(0, equalsIndex).trim();
+        const value = line.substring(equalsIndex + 1).trim();
+        
+        if (this.debug) {
+          console.log(`Key-value pair: "${key}" = "${value}"`);
+        }
+
+        try {
+          if (currentSection.startsWith('node:')) {
+            sections.nodes[currentNodeId][key] = this.parseValue(value);
+          } else if (currentSection === 'edges') {
+            const sourceNode = key;
+            const targetNode = this.parseValue(value);
+            if (typeof targetNode === 'string' && sourceNode) {
+              sections.edges.push({
+                source: sourceNode,
+                target: targetNode
+              });
+            }
+          } else if (currentSection === 'workflow') {
+            sections.workflow[key] = this.parseValue(value);
+            if (this.debug) {
+              console.log(`Added to workflow: ${key} = ${this.parseValue(value)}`);
+            }
+          } else if (currentSection === 'env') {
+            sections.env[key] = this.parseValue(value);
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.error(`Error parsing line: ${line}`, error);
+          }
+        }
+      }
+    }
+
+    // Debug final parsed structure
+    if (this.debug) {
+      console.log('Final parsed workflow section:', JSON.stringify(sections.workflow, null, 2));
+    }
+
+    return sections;
+  }
+
+  private parseValue(value: string): any {
+    value = value.trim();
+    
+    // Debug value parsing
+    if (this.debug) {
+      console.log(`Parsing value: "${value}"`);
+    }
+    
+    if (value.startsWith('{') && value.endsWith('}')) {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        if (this.debug) {
+          console.error(`JSON parse error for: ${value}`, error);
+        }
+        return value;
+      }
+    }
+    
+    if (value.startsWith('"') && value.endsWith('"')) {
+      return value.slice(1, -1);
+    }
+    
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    
+    if (!isNaN(Number(value)) && value !== '') {
+      return Number(value);
+    }
+    
+    return value.replace(/['"]/g, '');
+  }
+
+  validate(): boolean {
+    try {
+      const parsed = this.parseContent();
+      
+      // Debug validation
+      if (this.debug) {
+        console.log('Validating parsed content:', 
+          `Nodes: ${Object.keys(parsed.nodes).length}`,
+          `Workflow: ${JSON.stringify(parsed.workflow)}`,
+          `Edges: ${parsed.edges.length}`
+        );
+      }
+      
+      // Accept a minimum valid ACT file - less strict validation
+      // This helps when loading existing content that might be partial
+      if (parsed.workflow) {
+        // If missing name/description but has other valid parts, still consider it valid
+        if (!parsed.workflow.name) {
+          parsed.workflow.name = "Untitled Workflow";
+          if (this.debug) console.log('Warning: Setting default workflow name');
+        }
+        
+        if (!parsed.workflow.description) {
+          parsed.workflow.description = "No description provided";
+          if (this.debug) console.log('Warning: Setting default workflow description');
+        }
+      }
+      
+      // Check nodes only if there are any
+      if (Object.keys(parsed.nodes).length > 0) {
+        // Validate each node has minimum required fields
+        for (const [nodeId, node] of Object.entries(parsed.nodes)) {
+          if (!node.type) {
+            if (this.debug) console.error(`Validation failed: Node '${nodeId}' missing 'type' field`);
+            node.type = 'process'; // Set default type
+          }
+          if (!node.app_name) {
+            if (this.debug) console.error(`Validation failed: Node '${nodeId}' missing 'app_name' field`);
+            node.app_name = 'System'; // Set default app
+          }
+        }
+
+        // Set default start node if missing
+        if (!parsed.workflow.start_node) {
+          parsed.workflow.start_node = Object.keys(parsed.nodes)[0];
+          if (this.debug) console.log(`Setting default start_node: ${parsed.workflow.start_node}`);
+        } else if (!parsed.nodes[parsed.workflow.start_node]) {
+          // If start node reference is invalid, use first node
+          if (this.debug) console.error('Invalid start node reference, using first node');
+          parsed.workflow.start_node = Object.keys(parsed.nodes)[0];
+        }
+
+        // Filter valid edges
+        const nodeIds = new Set(Object.keys(parsed.nodes));
+        const validEdges = parsed.edges.filter(edge => {
+          const isValid = nodeIds.has(edge.source) && nodeIds.has(edge.target);
+          if (!isValid && this.debug) {
+            console.error(`Invalid edge: ${edge.source} -> ${edge.target}`);
+          }
+          return isValid;
+        });
+
+        parsed.edges = validEdges;
+      }
+
+      return true;
+    } catch (error) {
+      if (this.debug) {
+        console.error('Validation failed:', error);
+      }
+      return false;
+    }
+  }
+
+  getContent(): string {
+    const sections = this.parseContent();
+    let output = '';
+
+    // Debug generated content
+    if (this.debug) {
+      console.log('Generating content from:', 
+        `Nodes: ${Object.keys(sections.nodes).length}`,
+        `Workflow: ${JSON.stringify(sections.workflow)}`
+      );
+    }
+
+    output += '[workflow]\n';
+    for (const [key, value] of Object.entries(sections.workflow)) {
+      if (value !== undefined && value !== '') {
+        output += `${key} = ${typeof value === 'string' ? `"${value}"` : value}\n`;
+      }
+    }
+    output += '\n';
+
+    for (const [nodeId, node] of Object.entries(sections.nodes)) {
+      output += `[node:${nodeId}]\n`;
+      for (const [key, value] of Object.entries(node)) {
+        if (key !== 'id' && value !== undefined && value !== '') {
+          output += `${key} = ${
+            typeof value === 'object' ? JSON.stringify(value) : 
+            typeof value === 'string' ? `"${value}"` : value
+          }\n`;
+        }
+      }
+      output += '\n';
+    }
+
+    const nodeIds = new Set(Object.keys(sections.nodes));
+    const validEdges = sections.edges.filter(edge => 
+      nodeIds.has(edge.source) && nodeIds.has(edge.target)
+    );
+
+    if (validEdges.length > 0) {
+      output += '[edges]\n';
+      for (const edge of validEdges) {
+        output += `${edge.source} = ${edge.target}\n`;
+      }
+      output += '\n';
+    }
+
+    if (Object.keys(sections.env).length > 0) {
+      output += '[env]\n';
+      for (const [key, value] of Object.entries(sections.env)) {
+        if (value !== undefined && value !== '') {
+          output += `${key} = "${value}"\n`;
+        }
+      }
+    }
+
+    return output;
+  }
+}
+
+// Base template generation
+function generateBaseTemplate(title: string): string {
+  return `[workflow]
+name = "${title}"
+description = "Autonomous Agent System for ${title}"
+start_node = "start"
+
+[node:start]
+type = "start"
+label = "Initiating Agent: Begins the process by setting up necessary context and preparing the system for execution. This agent validates initial parameters and constructs the execution environment before dispatching control to subsequent agents."
+position_x = 100
+position_y = 100
+operation = "start"
+app_name = "System"
+operation_name = "startWorkflow"
+params = {"initialized": true}
+mode = "UC"
+
+[node:end]
+type = "end"
+label = "Termination Agent: Finalizes all processing, ensures all resources are properly closed, and reports completion status. This agent verifies that all necessary actions have been completed successfully before concluding the workflow execution."
+position_x = 1200
+position_y = 600
+operation = "end"
+app_name = "System"
+operation_name = "endWorkflow"
+params = {"cleanup": true}
+mode = "UC"
+
+[node:error_handler]
+type = "error"
+label = "Recovery Agent: Captures and processes exceptions throughout the system, determines appropriate recovery strategies, logs detailed error information, and attempts remediation where possible. This agent ensures system resilience by providing intelligent error management."
+position_x = 800
+position_y = 400
+operation = "error"
+app_name = "System"
+operation_name = "handleError"
+params = {"retryCount": 3, "logLevel": "error"}
+mode = "UC"
+
+[edges]
+start = end
+start = error_handler
+error_handler = end
+
+[env]
+ENVIRONMENT = "development"
+ERROR_NOTIFICATION_CHANNEL = "errors"`;
+}
+
+// Document handler implementation
+export const codeDocumentHandler = createDocumentHandler<'code'>({
+  kind: 'code',
+  systemPrompts: SYSTEM_PROMPTS,
+  
+  onCreateDocument: async ({ title, dataStream }) => {
+    try {
+      const baseContent = generateBaseTemplate(title);
+      const baseValidator = new ActValidator(baseContent, true);
+      
+      if (!baseValidator.validate()) {
+        throw new Error('Base template validation failed');
+      }
+
+      dataStream.writeData({
+        type: 'code-delta',
+        content: baseContent,
+      });
+
+      const { fullStream } = await streamObject({
+        model: myProvider.languageModel('artifact-model'),
+        system: SYSTEM_PROMPTS.create,
+        prompt: `Extend this base autonomous agent system configuration for: ${title}
+                Requirements:
+                1. Add all necessary specialized agent nodes with HIGHLY DETAILED labels explaining:
+                   - WHAT each agent does in specific terms
+                   - WHY this agent is necessary in the system
+                   - HOW the agent processes its inputs
+                   - WHAT outputs the agent produces
+                   - Any SPECIAL CONDITIONS the agent handles
+                2. Ensure proper error recovery connections
+                3. Maintain valid agent connections
+                4. Include relevant environment variables
+                5. Position agent nodes logically
+                
+                Base configuration:
+                ${baseContent}`,
+        schema: z.object({
+          content: z.string(),
+        }),
+        maxTokens: 20000,
+        temperature: 0.1
+      });
+
+      let finalContent = baseContent;
+      let lastValidContent = baseContent;
+
+      for await (const chunk of fullStream) {
+        if (chunk.type === 'object' && chunk.object?.content) {
+          const validator = new ActValidator(chunk.object.content, true);
+          
+          if (validator.validate()) {
+            lastValidContent = chunk.object.content;
+            finalContent = lastValidContent;
+            
+            dataStream.writeData({
+              type: 'code-delta',
+              content: lastValidContent,
+            });
+          }
+        }
+      }
+
+      return finalContent;
+    } catch (error) {
+      console.error('Error in onCreateDocument:', error);
+      throw error;
+    }
+  },
+// Fix for the onUpdateDocument function
+// The current function can return null, but the type expects a string
+
+// Fix for the onUpdateDocument function
+onUpdateDocument: async ({ document, description, dataStream }) => {
+  try {
+    const currentValidator = new ActValidator(document.content, true);
+    
+    if (!currentValidator.validate()) {
+      console.error('Current document validation failed');
+      // Return original content instead of potentially null
+      return document.content;
+    }
+
+    // Always assume we're working with existing document content
+    let updatedContent = document.content;
+
+    try {
+      // First, set the document as updating to avoid race conditions
+      dataStream.writeData({
+        type: 'code-delta',
+        content: document.content,
+      });
+
+      const { fullStream } = await streamObject({
+        model: myProvider.languageModel('artifact-model'),
+        system: SYSTEM_PROMPTS.update,
+        prompt: `Current autonomous agent system configuration:\n${document.content}\n\nUpdate request: ${description}\n
+                Requirements:
+                1. Preserve existing agent system structure
+                2. Maintain all valid agent connections
+                3. Keep error recovery mechanisms intact
+                4. Update only necessary agent configurations
+                5. Ensure all changes are valid
+                6. Enhance agent labels with comprehensive details about:
+                   - WHAT each agent does
+                   - WHY the agent is necessary
+                   - HOW the agent processes information
+                   - WHAT outputs or decisions the agent produces
+                   - Any SPECIAL CONDITIONS or SCENARIOS the agent handles`,
+        schema: z.object({
+          content: z.string(),
+        }),
+        maxTokens: 80000,
+        temperature: 0
+      });
+
+      let lastValidContent = document.content;
+
+      for await (const chunk of fullStream) {
+        if (chunk.type === 'object' && chunk.object?.content) {
+          const validator = new ActValidator(chunk.object.content, true);
+          
+          if (validator.validate()) {
+            lastValidContent = chunk.object.content;
+            updatedContent = lastValidContent;
+            
+            dataStream.writeData({
+              type: 'code-delta',
+              content: lastValidContent,
+            });
+          }
+        }
+      }
+
+      // Ensure we complete the operation by writing final data and signaling completion
+      dataStream.writeData({
+        type: 'code-delta',
+        content: updatedContent,
+      });
+      
+      // Signal that the update is complete - this is crucial to properly close the tool invocation
+      dataStream.writeData({ 
+        type: 'finish', 
+        content: '' 
+      });
+
+      // Return the updated content (or original if no valid updates occurred)
+      return updatedContent;
+    } catch (error) {
+      console.error('Error during AI processing:', error);
+      
+      // Signal completion even when an error occurs
+      dataStream.writeData({ 
+        type: 'finish', 
+        content: 'Error occurred during update' 
+      });
+      
+      // Return original content on error
+      return document.content; 
+    }
+  } catch (error) {
+    console.error('Error in onUpdateDocument:', error);
+    
+    // Signal completion in the outer catch block too
+    dataStream.writeData({ 
+      type: 'finish', 
+      content: 'Error occurred in document handler' 
+    });
+    
+    // Always return a string, never null
+    return document.content;
+  }
+},
+
+  onStreamPart: ({ streamPart, setArtifact }) => {
+    if (streamPart.type === 'code-delta') {
+      setArtifact((draftArtifact) => ({
+        ...draftArtifact,
+        content: streamPart.content as string,
+        isVisible: draftArtifact.status === 'streaming' && 
+          draftArtifact.content.length > 300 && 
+          draftArtifact.content.length < 310
+            ? true 
+            : draftArtifact.isVisible,
+        status: 'streaming',
+      }));
+    }
+  },
+});
+
+// Inject custom styles for ACT syntax highlighting
+if (typeof document !== 'undefined') {
+  const styleSheet = document.createElement('style');
+  styleSheet.textContent = `
+    .cm-section-header {
+      color: #569cd6;
+      font-weight: bold;
+    }
+
+    .cm-key {
+      color: #9cdcfe;
+    }
+
+    .cm-value {
+      color: #ce9178;
+    }
+
+    .cm-node-type {
+      color: #4ec9b0;
+    }
+
+    .cm-comment {
+      color: #6a9955;
+      font-style: italic;
+    }
+
+    .react-flow__node {
+   
+    }
+
+    .react-flow__node.running {
+      border-color: #3b82f6;
+      background-color: #eff6ff;
+    }
+
+    .react-flow__node.completed {
+      border-color: #22c55e;
+      background-color: #f0fdf4;
+    }
+
+    .react-flow__node.failed {
+      border-color: #ef4444;
+      background-color: #fef2f2;
+    }
+
+    .react-flow__edge-path {
+      stroke-width: 2;
+    }
+
+    .react-flow__edge.animated path {
+      stroke-dasharray: 5;
+      animation: dashdraw 0.5s linear infinite;
+    }
+
+    @keyframes dashdraw {
+      from {
+        stroke-dashoffset: 10;
+      }
+    }
+  `;
+  document.head.appendChild(styleSheet);
+}
+
+export default codeDocumentHandler;

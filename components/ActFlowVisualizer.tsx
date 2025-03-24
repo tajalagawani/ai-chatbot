@@ -1182,7 +1182,7 @@ useEffect(() => {
     if (reactFlowInstance) {
       setTimeout(() => {
         reactFlowInstance.fitView({
-          padding: 0.2,
+          padding: 1,
           minZoom: 0.5,
           maxZoom: 1.5,
           duration: 800
@@ -1250,16 +1250,16 @@ useEffect(() => {
     if (reactFlowInstance) {
       // First fit - immediate but with no animation
       reactFlowInstance.fitView({
-        padding: 0.2,
+        padding: 2,
         minZoom: 0.5,
         maxZoom: 1.5,
-        duration: 1
+        duration: 800
       });
       
       // Second fit with delay and animation for better visual experience
       setTimeout(() => {
         reactFlowInstance.fitView({
-          padding: 0.2,
+          padding: 1,
           minZoom: 0.5,
           maxZoom: 1.5,
           duration: 800
@@ -1312,7 +1312,7 @@ return (
       defaultViewport={defaultViewport}
       fitView
       fitViewOptions={{
-        padding: 0.9,
+        padding: 2,
         minZoom: 0.5,
         maxZoom: 1.5
       }}
@@ -1325,7 +1325,7 @@ return (
         color={isDarkTheme ? "#5b5b5b" : "#aaaaaa"}
         gap={20}
         style={{ 
-          backgroundColor: isDarkTheme ? '#0f0f10' : '#f8f9fa' 
+          backgroundColor: isDarkTheme ? '#040404 ' : '#4f4f4f' 
         }}
       />
       
@@ -1334,8 +1334,8 @@ return (
         className={isDarkTheme ? "controls-dark" : "controls-light"} 
         position="bottom-right"
         style={{
-          right: '10px',
-          bottom: '10px'
+          right: '5px',
+          bottom: '5px'
         }}
       />
       
@@ -1349,8 +1349,8 @@ return (
           style={{
             backgroundColor: isDarkTheme ? '#1a1a1a' : '#f1f1f1',
             border: `1px solid ${isDarkTheme ? '#333333' : '#dddddd'}`,
-            left: '10px',
-            bottom: '10px',
+            left: '2px',
+            bottom: '5px',
             transition: 'opacity 0.3s ease-in-out'
           }}
           nodeColor={node => {
@@ -1450,7 +1450,7 @@ return (
     <style jsx global>{`
       /* Dark theme styles */
       .react-flow-dark-theme {
-        background-color:rgba(18, 18, 18, 0.26);
+        background-color:rgba(13, 13, 13, 0.04);
       }
  
       .react-flow-dark-theme .react-flow__background {

@@ -576,71 +576,7 @@ export function Console({
                           defaultExpanded={true}
                         >
                           <div className="p-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1 bg-[#0f0f10]">
-                            {Object.entries(workflowStatus.result.node_status).map(([nodeId, status]) => {
-                              const styles = getStatusStyles(status.status);
-                              const hasResult = workflowStatus.result?.results && Object.keys(workflowStatus.result.results).includes(nodeId);
-                              const isFailed = status.status === 'error' || status.status === 'failed';
-                              
-                              return (
-                                <div
-                                  key={nodeId}
-                                  className={cn(
-                                    "px-2 py-1 rounded border transition-colors", 
-                                    hasResult ? "hover:border-[#3b82f6] cursor-pointer" : ""
-                                  )}
-                                  style={{ 
-                                    backgroundColor: styles.bg,
-                                    borderColor: styles.border 
-                                  }}
-                                  onClick={() => {
-                                    if (hasResult) {
-                                      toggleNodeResult(nodeId, consoleOutput.id);
-                                      
-                                      // Scroll to the node result after a small delay
-                                      setTimeout(() => {
-                                        const nodeResultElement = document.getElementById(`node-result-${consoleOutput.id}-${nodeId}`);
-                                        if (nodeResultElement) {
-                                          nodeResultElement.scrollIntoView({ behavior: 'smooth' });
-                                        }
-                                      }, 100);
-                                    }
-                                  }}
-                                  title={hasResult ? "Click to view node result" : undefined}
-                                >
-                                  <div className="flex justify-between items-center">
-                                    <span className="font-medium text-xs truncate max-w-[120px]" style={{ color: styles.text }} title={nodeId}>
-                                      {nodeId}
-                                    </span>
-                                    <div className="flex items-center">
-                                      <span 
-                                        className="text-[9px] px-1 py-0.5 rounded"
-                                        style={{ 
-                                          backgroundColor: styles.badgeBg,
-                                          color: styles.text
-                                        }}
-                                      >
-                                        {status.status}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-start mt-1">
-                                    <div className="flex-shrink-0 mt-0.5 mr-1">
-                                      {isFailed && (
-                                        <span className="text-[#ef4444] font-bold">!</span>
-                                      )}
-                                      {!isFailed && styles.icon}
-                                    </div>
-                                    <div 
-                                      className="text-[10px] line-clamp-2" 
-                                      style={{ color: isFailed ? '#ef4444' : styles.text }} 
-                                      title={status.message}
-                                    >
-                                      {status.message}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
+                            s 
                           </div>
                         </CollapsibleSection>
                         

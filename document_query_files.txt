@@ -80,27 +80,7 @@ export async function deleteChatById({ id }: { id: string }) {
     throw error;
   }
 }
-export async function getRecentDocumentsByKind({ 
-  userId, 
-  kind,
-  limit = 5
-}: { 
-  userId: string; 
-  kind: ArtifactKind;
-  limit?: number;
-}) {
-  try {
-    return await db
-      .select()
-      .from(document)
-      .where(and(eq(document.userId, userId), eq(document.kind, kind)))
-      .orderBy(desc(document.createdAt))
-      .limit(limit);
-  } catch (error) {
-    console.error('Failed to get recent documents by kind');
-    throw error;
-  }
-}
+
 export async function getChatsByUserId({ id }: { id: string }) {
   try {
     return await db
@@ -398,4 +378,319 @@ export async function updateDocumentInPlace({
     console.error('Failed to update document in place');
     throw error;
   }
+}import type { InferSelectModel } from 'drizzle-orm';
+import {
+  pgTable,
+  varchar,
+  timestamp,
+  json,
+  uuid,
+  text,
+  primaryKey,
+  foreignKey,
+  boolean,
+} from 'drizzle-orm/pg-core';
+
+export const user = pgTable('User', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  email: varchar('email', { length: 64 }).notNull(),
+  password: varchar('password', { length: 64 }),
+});
+
+export type User = InferSelectModel<typeof user>;
+
+export const chat = pgTable('Chat', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  createdAt: timestamp('createdAt').notNull(),
+  title: text('title').notNull(),
+  userId: uuid('userId')
+    .notNull()
+    .references(() => user.id),
+  visibility: varchar('visibility', { enum: ['public', 'private'] })
+    .notNull()
+    .default('private'),
+});
+
+export type Chat = InferSelectModel<typeof chat>;
+
+export const message = pgTable('Message', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  chatId: uuid('chatId')
+    .notNull()
+    .references(() => chat.id),
+  role: varchar('role').notNull(),
+  content: json('content').notNull(),
+  createdAt: timestamp('createdAt').notNull(),
+});
+
+export type Message = InferSelectModel<typeof message>;
+
+export const vote = pgTable(
+  'Vote',
+  {
+    chatId: uuid('chatId')
+      .notNull()
+      .references(() => chat.id),
+    messageId: uuid('messageId')
+      .notNull()
+      .references(() => message.id),
+    isUpvoted: boolean('isUpvoted').notNull(),
+  },
+  (table) => {
+    return {
+      pk: primaryKey({ columns: [table.chatId, table.messageId] }),
+    };
+  },
+);
+
+export type Vote = InferSelectModel<typeof vote>;
+
+export const document = pgTable(
+  'Document',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    createdAt: timestamp('createdAt').notNull(),
+    title: text('title').notNull(),
+    content: text('content'),
+    kind: varchar('text', { enum: ['text', 'code', 'image', 'sheet'] })
+      .notNull()
+      .default('text'),
+    userId: uuid('userId')
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => {
+    return {
+      pk: primaryKey({ columns: [table.id, table.createdAt] }),
+    };
+  },
+);
+
+export type Document = InferSelectModel<typeof document>;
+
+export const suggestion = pgTable(
+  'Suggestion',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    documentId: uuid('documentId').notNull(),
+    documentCreatedAt: timestamp('documentCreatedAt').notNull(),
+    originalText: text('originalText').notNull(),
+    suggestedText: text('suggestedText').notNull(),
+    description: text('description'),
+    isResolved: boolean('isResolved').notNull().default(false),
+    userId: uuid('userId')
+      .notNull()
+      .references(() => user.id),
+    createdAt: timestamp('createdAt').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.id] }),
+    documentRef: foreignKey({
+      columns: [table.documentId, table.documentCreatedAt],
+      foreignColumns: [document.id, document.createdAt],
+    }),
+  }),
+);
+
+export type Suggestion = InferSelectModel<typeof suggestion>;
+import { fireworks } from '@ai-sdk/fireworks';
+import {
+  customProvider,
+  extractReasoningMiddleware,
+  wrapLanguageModel,
+} from 'ai';
+
+// Import the Google Generative AI provider
+import { google } from '@ai-sdk/google';
+
+export const DEFAULT_CHAT_MODEL: string = 'chat-model-small';
+
+export const myProvider = customProvider({
+  languageModels: {
+    // Replace with Gemini 2.0 model
+    'chat-model-small': google('gemini-2.0-flash-001'),
+    'chat-model-large': google('gemini-1.5-pro'),
+    'artifact-model': google('gemini-2.0-flash-lite'),
+    'chat-model-reasoning': wrapLanguageModel({
+      model: fireworks('accounts/fireworks/models/deepseek-r1'),
+      middleware: extractReasoningMiddleware({ tagName: 'think' }),
+    }),
+    'title-model': google('gemini-1.5-flash'),
+  },
+  // No imageModels section as it's not supported in the same way
+});
+
+interface ChatModel {
+  id: string;
+  name: string;
+  description: string;
 }
+
+export const chatModels: Array<ChatModel> = [
+  {
+    id: 'chat-model-small',
+    name: 'Gemini 2.0 Flash',
+    description: 'Latest Gemini model for fast, intelligent responses',
+  },
+  {
+    id: 'chat-model-large',
+    name: 'Gemini 1.5 Pro',
+    description: 'Large model for complex, multi-step tasks',
+  },
+  {
+    id: 'chat-model-reasoning',
+    name: 'Reasoning model',
+    description: 'Uses advanced reasoning (DeepSeek)',
+  },
+];import { memo } from 'react';
+
+import type { ArtifactKind } from './artifact';
+import { FileIcon, LoaderIcon, MessageIcon, PencilEditIcon } from './icons';
+import { toast } from 'sonner';
+import { useArtifact } from '@/hooks/use-artifact';
+
+const getActionText = (
+  type: 'create' | 'update' | 'request-suggestions',
+  tense: 'present' | 'past',
+) => {
+  switch (type) {
+    case 'create':
+      return tense === 'present' ? 'Creating' : 'Created';
+    case 'update':
+      return tense === 'present' ? 'Updating' : 'Updated';
+    case 'request-suggestions':
+      return tense === 'present'
+        ? 'Adding suggestions'
+        : 'Added suggestions to';
+    default:
+      return null;
+  }
+};
+
+interface DocumentToolResultProps {
+  type: 'create' | 'update' | 'request-suggestions';
+  result: { id: string; title: string; kind: ArtifactKind };
+  isReadonly: boolean;
+}
+
+function PureDocumentToolResult({
+  type,
+  result,
+  isReadonly,
+}: DocumentToolResultProps) {
+  const { setArtifact } = useArtifact();
+
+  return (
+    <button
+      type="button"
+      className="bg-background cursor-pointer border py-2 px-3 rounded-xl w-fit flex flex-row gap-3 items-start"
+      onClick={(event) => {
+        if (isReadonly) {
+          toast.error(
+            'Viewing files in shared chats is currently not supported.',
+          );
+          return;
+        }
+
+        const rect = event.currentTarget.getBoundingClientRect();
+
+        const boundingBox = {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+        };
+
+        setArtifact({
+          id: result.id,
+          documentId: result.id,
+          kind: result.kind,
+          content: '',
+          title: result.title,
+          isVisible: true,
+          status: 'idle',
+          boundingBox,
+        });
+      }}
+    >
+      <div className="text-muted-foreground mt-1">
+        {type === 'create' ? (
+          <FileIcon />
+        ) : type === 'update' ? (
+          <PencilEditIcon />
+        ) : type === 'request-suggestions' ? (
+          <MessageIcon />
+        ) : null}
+      </div>
+      <div className="text-left">
+        {`${getActionText(type, 'past')} "${result.title}"`}
+      </div>
+    </button>
+  );
+}
+
+export const DocumentToolResult = memo(PureDocumentToolResult, () => true);
+
+interface DocumentToolCallProps {
+  type: 'create' | 'update' | 'request-suggestions';
+  args: { title: string };
+  isReadonly: boolean;
+}
+
+function PureDocumentToolCall({
+  type,
+  args,
+  isReadonly,
+}: DocumentToolCallProps) {
+  const { setArtifact } = useArtifact();
+
+  return (
+    <button
+      type="button"
+      className="cursor pointer w-fit border py-2 px-3 rounded-xl flex flex-row items-start justify-between gap-3"
+      onClick={(event) => {
+        if (isReadonly) {
+          toast.error(
+            'Viewing files in shared chats is currently not supported.',
+          );
+          return;
+        }
+
+        const rect = event.currentTarget.getBoundingClientRect();
+
+        const boundingBox = {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+        };
+
+        setArtifact((currentArtifact) => ({
+          ...currentArtifact,
+          isVisible: true,
+          boundingBox,
+        }));
+      }}
+    >
+      <div className="flex flex-row gap-3 items-start">
+        <div className="text-zinc-500 mt-1">
+          {type === 'create' ? (
+            <FileIcon />
+          ) : type === 'update' ? (
+            <PencilEditIcon />
+          ) : type === 'request-suggestions' ? (
+            <MessageIcon />
+          ) : null}
+        </div>
+
+        <div className="text-left">
+          {`${getActionText(type, 'present')} ${args.title ? `"${args.title}"` : ''}`}
+        </div>
+      </div>
+
+      <div className="animate-spin mt-1">{<LoaderIcon />}</div>
+    </button>
+  );
+}
+
+export const DocumentToolCall = memo(PureDocumentToolCall, () => true);

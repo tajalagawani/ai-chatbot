@@ -24,7 +24,7 @@ RUN mkdir -p /app/tmp
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV GITHUB_TOKEN=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
+ENV GITHUB_TOKEN=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
 ENV GITHUB_USERNAME=tajalagawani
 
 # Command to run the application

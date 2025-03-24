@@ -18,6 +18,7 @@ import { Markdown } from './markdown';
 import { MessageActions } from './message-actions';
 import { PreviewAttachment } from './preview-attachment';
 import { Weather } from './weather';
+import { FlowExecutionView } from './FlowExecutionView';
 import equal from 'fast-deep-equal';
 import { cn } from '@/lib/utils';
 import { Button } from './ui/button';
@@ -25,6 +26,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { MessageEditor } from './message-editor';
 import { DocumentPreview } from './document-preview';
 import { MessageReasoning } from './message-reasoning';
+import { Loader2 } from 'lucide-react';
 
 const PurePreviewMessage = ({
   chatId,
@@ -166,6 +168,11 @@ const PurePreviewMessage = ({
                             result={result}
                             isReadonly={isReadonly}
                           />
+                        ) : toolName === 'executeWorkflow' ? (
+                          <FlowExecutionView 
+                            executionResult={result}
+                            isReadonly={isReadonly}
+                          />
                         ) : (
                           <pre>{JSON.stringify(result, null, 2)}</pre>
                         )}
@@ -176,7 +183,7 @@ const PurePreviewMessage = ({
                     <div
                       key={toolCallId}
                       className={cx({
-                        skeleton: ['getWeather'].includes(toolName),
+                        skeleton: ['getWeather', 'executeWorkflow'].includes(toolName),
                       })}
                     >
                       {toolName === 'getWeather' ? (
@@ -195,6 +202,15 @@ const PurePreviewMessage = ({
                           args={args}
                           isReadonly={isReadonly}
                         />
+                      ) : toolName === 'executeWorkflow' ? (
+                        <div className="h-40 w-full bg-slate-200 dark:bg-slate-700 animate-pulse rounded-xl p-4">
+                          <p className="text-slate-500 dark:text-slate-400">
+                            <Loader2 className="inline mr-2 animate-spin" size={16} />
+                            Creating and executing flow...
+                          </p>
+                          <div className="mt-4 h-2 bg-slate-300 dark:bg-slate-600 rounded-full w-3/4 animate-pulse"></div>
+                          <div className="mt-2 h-2 bg-slate-300 dark:bg-slate-600 rounded-full w-1/2 animate-pulse"></div>
+                        </div>
                       ) : null}
                     </div>
                   );

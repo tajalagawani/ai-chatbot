@@ -161,12 +161,7 @@ LAYOUT ALGORITHM REQUIREMENTS
 10. Error handler agent nodes should be positioned at the bottom of the diagram
 11. All coordinates must be positive integers
 12. Sequential agent nodes should form clear paths without overlapping
-
-`
-
-;
-
-
+`;
 
 // Artifacts UI Guidelines
 const ARTIFACTS_PROMPT = `
@@ -174,9 +169,11 @@ Artifacts is a special user interface mode that helps users with writing, editin
 
 When asked to write ACT configuration files, always use artifacts. Use the exact format specified in the ACT file instructions.
 
+When discussing an ACT workflow that exists in the document context, respond to questions about its structure, purpose, and function without requiring the user to explicitly open it in the artifacts panel.
+
 DO NOT UPDATE DOCUMENTS IMMEDIATELY AFTER CREATING THEM. WAIT FOR USER FEEDBACK OR REQUEST TO UPDATE IT.`;
 
-// Combined system prompts
+// Enhanced system prompts with better document awareness
 const SYSTEM_PROMPTS = {
   create: `${ACT_STRUCTURE_PROMPT}\n\n${ARTIFACTS_PROMPT}\n\nAdditional Create Guidelines:
 1. Always generate complete, valid autonomous agent configurations
@@ -192,7 +189,15 @@ const SYSTEM_PROMPTS = {
 3. Keep existing agent connections valid
 4. Update only necessary agent configurations
 5. Validate all changes
-6. Enhance agent labels with detailed explanations of purpose and function`
+6. Enhance agent labels with detailed explanations of purpose and function`,
+
+  analyze: `${ACT_STRUCTURE_PROMPT}\n\n${ARTIFACTS_PROMPT}\n\nAdditional Analysis Guidelines:
+1. Examine node types, connections, and configurations
+2. Identify the purpose and function of each node
+3. Trace data flow through the workflow
+4. Highlight potential issues or improvements
+5. Explain how the workflow accomplishes its goals
+6. Suggest optimizations when appropriate`
 };
 
 // Schema definitions
@@ -506,6 +511,41 @@ class ActValidator {
 
     return output;
   }
+  
+  // New method to get workflow summary for chat context
+  getWorkflowSummary(): string {
+    try {
+      const parsed = this.parseContent();
+      const nodeCount = Object.keys(parsed.nodes).length;
+      const edgeCount = parsed.edges.length;
+      
+      let summary = `Workflow Name: ${parsed.workflow.name || "Untitled"}\n`;
+      summary += `Description: ${parsed.workflow.description || "No description"}\n`;
+      summary += `Start Node: ${parsed.workflow.start_node || "Not specified"}\n`;
+      summary += `Contains ${nodeCount} nodes and ${edgeCount} connections\n\n`;
+      
+      summary += "Key Nodes:\n";
+      
+      // Get a few important nodes to summarize
+      const startNode = parsed.nodes[parsed.workflow.start_node];
+      const errorNodes = Object.entries(parsed.nodes)
+        .filter(([_, node]) => node.type === 'error')
+        .map(([id, node]) => ({ id, ...node }));
+      
+      if (startNode) {
+        summary += `- Start: ${startNode.label?.substring(0, 100)}...\n`;
+      }
+      
+      if (errorNodes.length > 0) {
+        summary += `- Error Handler: ${errorNodes[0].label?.substring(0, 100)}...\n`;
+      }
+      
+      return summary;
+    } catch (error) {
+      console.error('Error generating workflow summary:', error);
+      return "Unable to generate workflow summary";
+    }
+  }
 }
 
 // Base template generation
@@ -598,7 +638,7 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
         schema: z.object({
           content: z.string(),
         }),
-        maxTokens: 20000,
+        maxTokens: 40000,
         temperature: 0.1
       });
 
@@ -621,116 +661,139 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
         }
       }
 
+      // Add workflow summary data for easy context integration
+      try {
+        const finalValidator = new ActValidator(finalContent);
+        const summary = finalValidator.getWorkflowSummary();
+        
+        dataStream.writeData({
+          type: 'metadata',
+          content: { workflowSummary: summary }
+        });
+      } catch (error) {
+        console.error('Error generating workflow summary:', error);
+      }
+
       return finalContent;
     } catch (error) {
       console.error('Error in onCreateDocument:', error);
       throw error;
     }
   },
-// Fix for the onUpdateDocument function
-// The current function can return null, but the type expects a string
 
-// Fix for the onUpdateDocument function
-onUpdateDocument: async ({ document, description, dataStream }) => {
-  try {
-    const currentValidator = new ActValidator(document.content, true);
-    
-    if (!currentValidator.validate()) {
-      console.error('Current document validation failed');
-      // Return original content instead of potentially null
-      return document.content;
-    }
-
-    // Always assume we're working with existing document content
-    let updatedContent = document.content;
-
+  onUpdateDocument: async ({ document, description, dataStream }) => {
     try {
-      // First, set the document as updating to avoid race conditions
-      dataStream.writeData({
-        type: 'code-delta',
-        content: document.content,
-      });
-
-      const { fullStream } = await streamObject({
-        model: myProvider.languageModel('artifact-model'),
-        system: SYSTEM_PROMPTS.update,
-        prompt: `Current autonomous agent system configuration:\n${document.content}\n\nUpdate request: ${description}\n
-                Requirements:
-                1. Preserve existing agent system structure
-                2. Maintain all valid agent connections
-                3. Keep error recovery mechanisms intact
-                4. Update only necessary agent configurations
-                5. Ensure all changes are valid
-                6. Enhance agent labels with comprehensive details about:
-                   - WHAT each agent does
-                   - WHY the agent is necessary
-                   - HOW the agent processes information
-                   - WHAT outputs or decisions the agent produces
-                   - Any SPECIAL CONDITIONS or SCENARIOS the agent handles`,
-        schema: z.object({
-          content: z.string(),
-        }),
-        maxTokens: 80000,
-        temperature: 0
-      });
-
-      let lastValidContent = document.content;
-
-      for await (const chunk of fullStream) {
-        if (chunk.type === 'object' && chunk.object?.content) {
-          const validator = new ActValidator(chunk.object.content, true);
-          
-          if (validator.validate()) {
-            lastValidContent = chunk.object.content;
-            updatedContent = lastValidContent;
-            
-            dataStream.writeData({
-              type: 'code-delta',
-              content: lastValidContent,
-            });
-          }
-        }
+      const currentValidator = new ActValidator(document.content, true);
+      
+      if (!currentValidator.validate()) {
+        console.error('Current document validation failed');
+        // Return original content instead of potentially null
+        return document.content;
       }
 
-      // Ensure we complete the operation by writing final data and signaling completion
-      dataStream.writeData({
-        type: 'code-delta',
-        content: updatedContent,
-      });
-      
-      // Signal that the update is complete - this is crucial to properly close the tool invocation
-      dataStream.writeData({ 
-        type: 'finish', 
-        content: '' 
-      });
+      // Always assume we're working with existing document content
+      let updatedContent = document.content;
 
-      // Return the updated content (or original if no valid updates occurred)
-      return updatedContent;
+      try {
+        // First, set the document as updating to avoid race conditions
+        dataStream.writeData({
+          type: 'code-delta',
+          content: document.content,
+        });
+
+        const { fullStream } = await streamObject({
+          model: myProvider.languageModel('artifact-model'),
+          system: SYSTEM_PROMPTS.update,
+          prompt: `Current autonomous agent system configuration:\n${document.content}\n\nUpdate request: ${description}\n
+                  Requirements:
+                  1. Preserve existing agent system structure
+                  2. Maintain all valid agent connections
+                  3. Keep error recovery mechanisms intact
+                  4. Update only necessary agent configurations
+                  5. Ensure all changes are valid
+                  6. Enhance agent labels with comprehensive details about:
+                     - WHAT each agent does
+                     - WHY the agent is necessary
+                     - HOW the agent processes information
+                     - WHAT outputs or decisions the agent produces
+                     - Any SPECIAL CONDITIONS or SCENARIOS the agent handles`,
+          schema: z.object({
+            content: z.string(),
+          }),
+          maxTokens: 80000,
+          temperature: 0
+        });
+
+        let lastValidContent = document.content;
+
+        for await (const chunk of fullStream) {
+          if (chunk.type === 'object' && chunk.object?.content) {
+            const validator = new ActValidator(chunk.object.content, true);
+            
+            if (validator.validate()) {
+              lastValidContent = chunk.object.content;
+              updatedContent = lastValidContent;
+              
+              dataStream.writeData({
+                type: 'code-delta',
+                content: lastValidContent,
+              });
+            }
+          }
+        }
+
+        // Update workflow summary metadata after changes
+        try {
+          const updatedValidator = new ActValidator(updatedContent);
+          const summary = updatedValidator.getWorkflowSummary();
+          
+          dataStream.writeData({
+            type: 'metadata',
+            content: { workflowSummary: summary }
+          });
+        } catch (error) {
+          console.error('Error generating updated workflow summary:', error);
+        }
+
+        // Ensure we complete the operation by writing final data and signaling completion
+        dataStream.writeData({
+          type: 'code-delta',
+          content: updatedContent,
+        });
+        
+        // Signal that the update is complete - this is crucial to properly close the tool invocation
+        dataStream.writeData({ 
+          type: 'finish', 
+          content: '' 
+        });
+
+        // Return the updated content (or original if no valid updates occurred)
+        return updatedContent;
+      } catch (error) {
+        console.error('Error during AI processing:', error);
+        
+        // Signal completion even when an error occurs
+        dataStream.writeData({ 
+          type: 'finish', 
+          content: 'Error occurred during update' 
+        });
+        
+        // Return original content on error
+        return document.content; 
+      }
     } catch (error) {
-      console.error('Error during AI processing:', error);
+      console.error('Error in onUpdateDocument:', error);
       
-      // Signal completion even when an error occurs
+      // Signal completion in the outer catch block too
       dataStream.writeData({ 
         type: 'finish', 
-        content: 'Error occurred during update' 
+        content: 'Error occurred in document handler' 
       });
       
-      // Return original content on error
-      return document.content; 
+      // Always return a string, never null
+      return document.content;
     }
-  } catch (error) {
-    console.error('Error in onUpdateDocument:', error);
-    
-    // Signal completion in the outer catch block too
-    dataStream.writeData({ 
-      type: 'finish', 
-      content: 'Error occurred in document handler' 
-    });
-    
-    // Always return a string, never null
-    return document.content;
-  }
-},
+  },
 
   onStreamPart: ({ streamPart, setArtifact }) => {
     if (streamPart.type === 'code-delta') {
@@ -744,8 +807,42 @@ onUpdateDocument: async ({ document, description, dataStream }) => {
             : draftArtifact.isVisible,
         status: 'streaming',
       }));
+    } else if (streamPart.type === 'metadata') {
+      // Store any metadata for later use
+      setArtifact((draftArtifact) => ({
+        ...draftArtifact,
+        metadata: {
+          ...(draftArtifact.metadata || {}),
+          ...(streamPart.content as any)
+        }
+      }));
     }
   },
+  
+  // New method to provide analysis of ACT documents for chat context
+  analyzeDocument: async (content: string) => {
+    try {
+      const validator = new ActValidator(content);
+      if (!validator.validate()) {
+        return "This appears to be an invalid ACT workflow configuration.";
+      }
+      
+      const parsed = validator.parseContent();
+      const summary = validator.getWorkflowSummary();
+      
+      return {
+        summary,
+        nodeCount: Object.keys(parsed.nodes).length,
+        edgeCount: parsed.edges.length,
+        startNode: parsed.workflow.start_node,
+        name: parsed.workflow.name,
+        description: parsed.workflow.description
+      };
+    } catch (error) {
+      console.error('Error analyzing document:', error);
+      return "Failed to analyze the ACT workflow configuration.";
+    }
+  }
 });
 
 // Inject custom styles for ACT syntax highlighting
@@ -775,13 +872,7 @@ if (typeof document !== 'undefined') {
     }
 
     .react-flow__node {
-      padding: 10px;
-      border-radius: 5px;
-      font-size: 12px;
-      color: #333;
-      text-align: center;
-      border-width: 2px;
-      width: 150px;
+   
     }
 
     .react-flow__node.running {

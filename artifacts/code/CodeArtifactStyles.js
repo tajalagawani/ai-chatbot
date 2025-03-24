@@ -23,13 +23,7 @@ export const styles = `
   }
 
   .react-flow__node {
-    padding: 10px;
-    border-radius: 5px;
-    font-size: 12px;
-    color: #333;
-    text-align: center;
-    border-width: 2px;
-    width: 150px;
+  
   }
 
   .react-flow__node.running {

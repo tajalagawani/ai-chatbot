@@ -1,0 +1,1181 @@
+import {
+  type Message,
+  createDataStreamResponse,
+  smoothStream,
+  streamText,
+} from 'ai';
+
+import { auth } from '@/app/(auth)/auth';
+import { myProvider } from '@/lib/ai/models';
+import { systemPrompt } from '@/lib/ai/prompts';
+import {
+  deleteChatById,
+  getChatById,
+  saveChat,
+  saveMessages,
+} from '@/lib/db/queries';
+import {
+  generateUUID,
+  getMostRecentUserMessage,
+  sanitizeResponseMessages,
+} from '@/lib/utils';
+
+import { generateTitleFromUserMessage } from '../../actions';
+import { createDocument } from '@/lib/ai/tools/create-document';
+import { updateDocument } from '@/lib/ai/tools/update-document';
+import { requestSuggestions } from '@/lib/ai/tools/request-suggestions';
+import { getWeather } from '@/lib/ai/tools/get-weather';
+
+export const maxDuration = 60;
+
+export async function POST(request: Request) {
+  const {
+    id,
+    messages,
+    selectedChatModel,
+  }: { id: string; messages: Array<Message>; selectedChatModel: string } =
+    await request.json();
+
+  const session = await auth();
+
+  if (!session || !session.user || !session.user.id) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  const userMessage = getMostRecentUserMessage(messages);
+
+  if (!userMessage) {
+    return new Response('No user message found', { status: 400 });
+  }
+
+  const chat = await getChatById({ id });
+
+  if (!chat) {
+    const title = await generateTitleFromUserMessage({ message: userMessage });
+    await saveChat({ id, userId: session.user.id, title });
+  }
+
+  await saveMessages({
+    messages: [{ ...userMessage, createdAt: new Date(), chatId: id }],
+  });
+
+  return createDataStreamResponse({
+    execute: (dataStream) => {
+      const result = streamText({
+        model: myProvider.languageModel(selectedChatModel),
+        system: systemPrompt({ selectedChatModel }),
+        messages,
+        maxSteps: 5,
+        experimental_activeTools:
+          selectedChatModel === 'chat-model-reasoning'
+            ? []
+            : [
+                'getWeather',
+                'createDocument',
+                'updateDocument',
+                'requestSuggestions',
+              ],
+        experimental_transform: smoothStream({ chunking: 'word' }),
+        experimental_generateMessageId: generateUUID,
+        tools: {
+          getWeather,
+          createDocument: createDocument({ session, dataStream }),
+          updateDocument: updateDocument({ session, dataStream }),
+          requestSuggestions: requestSuggestions({
+            session,
+            dataStream,
+          }),
+        },
+        onFinish: async ({ response, reasoning }) => {
+          if (session.user?.id) {
+            try {
+              const sanitizedResponseMessages = sanitizeResponseMessages({
+                messages: response.messages,
+                reasoning,
+              });
+
+              await saveMessages({
+                messages: sanitizedResponseMessages.map((message) => {
+                  return {
+                    id: message.id,
+                    chatId: id,
+                    role: message.role,
+                    content: message.content,
+                    createdAt: new Date(),
+                  };
+                }),
+              });
+            } catch (error) {
+              console.error('Failed to save chat');
+            }
+          }
+        },
+        experimental_telemetry: {
+          isEnabled: true,
+          functionId: 'stream-text',
+        },
+      });
+
+      result.mergeIntoDataStream(dataStream, {
+        sendReasoning: true,
+      });
+    },
+    onError: () => {
+      return 'Oops, an error occured!';
+    },
+  });
+}
+
+export async function DELETE(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const id = searchParams.get('id');
+
+  if (!id) {
+    return new Response('Not Found', { status: 404 });
+  }
+
+  const session = await auth();
+
+  if (!session || !session.user) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  try {
+    const chat = await getChatById({ id });
+
+    if (chat.userId !== session.user.id) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    await deleteChatById({ id });
+
+    return new Response('Chat deleted', { status: 200 });
+  } catch (error) {
+    return new Response('An error occurred while processing your request', {
+      status: 500,
+    });
+  }
+}
+'use client';
+
+import type { Attachment, Message, ChatRequestOptions } from 'ai';
+import { useChat } from 'ai/react';
+import { useState, useCallback } from 'react';
+import useSWR, { useSWRConfig } from 'swr';
+
+import { ChatHeader } from '@/components/chat-header';
+import type { Vote, Document } from '@/lib/db/schema';
+import { fetcher, generateUUID } from '@/lib/utils';
+
+import { Artifact } from './artifact';
+import { MultimodalInput } from './multimodal-input';
+import { Messages } from './messages';
+import { VisibilityType } from './visibility-selector';
+import { useArtifactSelector } from '@/hooks/use-artifact';
+import { toast } from 'sonner';
+
+export function Chat({
+  id,
+  initialMessages,
+  selectedChatModel,
+  selectedVisibilityType,
+  isReadonly,
+}: {
+  id: string;
+  initialMessages: Array<Message>;
+  selectedChatModel: string;
+  selectedVisibilityType: VisibilityType;
+  isReadonly: boolean;
+}) {
+  const { mutate } = useSWRConfig();
+  const artifact = useArtifactSelector((state) => state);
+  const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
+  const isArtifactFullScreen = useArtifactSelector((state) => state.isFullScreen);
+
+  const {
+    messages,
+    setMessages,
+    handleSubmit,
+    input,
+    setInput,
+    append,
+    isLoading,
+    stop,
+    reload,
+  } = useChat({
+    id,
+    body: { id, selectedChatModel: selectedChatModel },
+    initialMessages,
+    experimental_throttle: 100,
+    sendExtraMessageFields: true,
+    generateId: generateUUID,
+    onFinish: () => {
+      mutate('/api/history');
+    },
+    onError: (error) => {
+      toast.error('An error occurred, please try again!');
+    },
+  });
+
+  const { data: votes } = useSWR<Array<Vote>>(
+    `/api/vote?chatId=${id}`,
+    fetcher,
+  );
+
+  // If we have an active artifact, ensure we fetch the latest document before reloading
+  const { data: documents, mutate: mutateDocuments } = useSWR<Array<Document>>(
+    artifact.documentId !== 'init' 
+      ? `/api/document?id=${artifact.documentId}` 
+      : null,
+    fetcher,
+    {
+      revalidateOnFocus: true,
+      refreshInterval: isLoading ? 500 : 1000,
+    }
+  );
+
+  // Enhanced reload function that ensures latest document state and includes document content
+  const enhancedReload = useCallback(
+    async (chatRequestOptions?: ChatRequestOptions) => {
+      // First, explicitly fetch the latest document if we have an active artifact
+      if (artifact.documentId !== 'init') {
+        await mutateDocuments();
+        
+        // Get the most recent document content from the freshly updated documents
+        let latestContent = '';
+        if (documents && documents.length > 0) {
+          latestContent = documents[documents.length - 1].content || '';
+        } else {
+          latestContent = artifact.currentContent || artifact.content;
+        }
+        
+        // Include document content in the request body
+        const updatedOptions: ChatRequestOptions = {
+          ...chatRequestOptions,
+          data: {
+            ...(chatRequestOptions?.data || {}),
+            documentContent: latestContent,
+            documentId: artifact.documentId,
+            documentKind: artifact.kind,
+            documentTitle: artifact.title
+          }
+        };
+        
+        // Then proceed with the reload with document content
+        return reload(updatedOptions);
+      }
+      
+      // If no document, just reload normally
+      return reload(chatRequestOptions);
+    },
+    [artifact, documents, mutateDocuments, reload]
+  );
+
+  // Enhanced submit function to ensure latest document state and includes document content
+  const enhancedHandleSubmit = useCallback(
+    async (event?: { preventDefault?: () => void }, chatRequestOptions?: ChatRequestOptions) => {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      
+      // Ensure we have the latest document before submitting
+      if (artifact.documentId !== 'init') {
+        await mutateDocuments();
+        
+        // Get the most recent document content from the freshly updated documents
+        let latestContent = '';
+        if (documents && documents.length > 0) {
+          latestContent = documents[documents.length - 1].content || '';
+        } else {
+          latestContent = artifact.currentContent || artifact.content;
+        }
+        
+        // Include document content in the request body
+        const updatedOptions: ChatRequestOptions = {
+          ...chatRequestOptions,
+          data: {
+            ...(chatRequestOptions?.data || {}),
+            documentContent: latestContent,
+            documentId: artifact.documentId,
+            documentKind: artifact.kind,
+            documentTitle: artifact.title
+          }
+        };
+        
+        // Then submit with document content
+        return handleSubmit(event, updatedOptions);
+      }
+      
+      // If no document, just submit normally
+      return handleSubmit(event, chatRequestOptions);
+    },
+    [artifact, documents, mutateDocuments, handleSubmit]
+  );
+
+  const [attachments, setAttachments] = useState<Array<Attachment>>([]);
+
+  return (
+    <>
+      {/* Hide the chat interface when artifact is in full screen mode */}
+      <div className={`flex flex-col min-w-0 h-dvh bg-background ${isArtifactFullScreen ? 'hidden' : ''}`}>
+        <ChatHeader
+          chatId={id}
+          selectedModelId={selectedChatModel}
+          selectedVisibilityType={selectedVisibilityType}
+          isReadonly={isReadonly}
+        />
+
+        <Messages
+          chatId={id}
+          isLoading={isLoading}
+          votes={votes}
+          messages={messages}
+          setMessages={setMessages}
+          reload={enhancedReload}
+          isReadonly={isReadonly}
+          isArtifactVisible={isArtifactVisible}
+        />
+
+        <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
+          {!isReadonly && (
+            <MultimodalInput
+              chatId={id}
+              input={input}
+              setInput={setInput}
+              handleSubmit={enhancedHandleSubmit}
+              isLoading={isLoading}
+              stop={stop}
+              attachments={attachments}
+              setAttachments={setAttachments}
+              messages={messages}
+              setMessages={setMessages}
+              append={append}
+            />
+          )}
+        </form>
+      </div>
+
+      <Artifact
+        chatId={id}
+        input={input}
+        setInput={setInput}
+        handleSubmit={enhancedHandleSubmit}
+        isLoading={isLoading}
+        stop={stop}
+        attachments={attachments}
+        setAttachments={setAttachments}
+        append={append}
+        messages={messages}
+        setMessages={setMessages}
+        reload={enhancedReload}
+        votes={votes}
+        isReadonly={isReadonly}
+      />
+    </>
+  );
+}import { fireworks } from '@ai-sdk/fireworks';
+import {
+  customProvider,
+  extractReasoningMiddleware,
+  wrapLanguageModel,
+} from 'ai';
+
+// Import the Google Generative AI provider
+import { google } from '@ai-sdk/google';
+
+export const DEFAULT_CHAT_MODEL: string = 'chat-model-small';
+
+export const myProvider = customProvider({
+  languageModels: {
+    // Replace with Gemini 2.0 model
+    'chat-model-small': google('gemini-2.0-flash-001'),
+    'chat-model-large': google('gemini-1.5-pro'),
+    'artifact-model': google('gemini-2.0-flash-lite'),
+    'chat-model-reasoning': wrapLanguageModel({
+      model: fireworks('accounts/fireworks/models/deepseek-r1'),
+      middleware: extractReasoningMiddleware({ tagName: 'think' }),
+    }),
+    'title-model': google('gemini-1.5-flash'),
+  },
+  // No imageModels section as it's not supported in the same way
+});
+
+interface ChatModel {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export const chatModels: Array<ChatModel> = [
+  {
+    id: 'chat-model-small',
+    name: 'Gemini 2.0 Flash',
+    description: 'Latest Gemini model for fast, intelligent responses',
+  },
+  {
+    id: 'chat-model-large',
+    name: 'Gemini 1.5 Pro',
+    description: 'Large model for complex, multi-step tasks',
+  },
+  {
+    id: 'chat-model-reasoning',
+    name: 'Reasoning model',
+    description: 'Uses advanced reasoning (DeepSeek)',
+  },
+];// // ======================================================
+// // Module: ActArtifactSystem.ts
+// // ======================================================
+
+// import { ArtifactKind } from '@/components/artifact';
+
+// /* ============================================================================
+//  * Interfaces & Types
+//  * ========================================================================== */
+// interface ChatModel {
+//   id: string;
+//   name: string;
+//   description: string;
+// }
+
+// export type ExtendedArtifactKind = ArtifactKind | 'act';
+
+// /* ============================================================================
+//  * Prompts & Constants
+//  * ========================================================================== */
+// export const REGULAR_PROMPT =
+//   'You are a friendly assistant! Keep your responses concise and helpful.';
+
+// export const ACT_BASE_PROMPT = `
+// You are an ACT workflow file generator. When creating ACT files:
+
+//  WORKFLOW INI STRUCTURE
+//     ====================
+//     1. Include at least 5 to 10 nodes or more IF needed to represent a comprehensive workflow based on the description.
+//     2. Use various node shapes to represent different types of steps (e.g., rectangles for processes, diamonds for decisions).
+//     3. Include detailed labels for each node and edge.
+//     4. Represent complex logic with multiple paths and decision points.
+//     5. Include any loops or repetitions in the process.
+//     6. Add annotations or subgraphs if appropriate to group related steps.
+//     7. Follow a clear and logical flow from start to finish.
+//     8. When we need to use an API, specify the API name and the method to use.
+//     9. Each node represents a specific operation or decision in the workflow.
+//     10. Incorporate conditional statements (if/elif) for making decisions based on project type or AI recommendations.
+//     11. Include loops (for) for iterating through recommended tools or document structures.
+//     12. Implement error handling to manage exceptions and retry failed steps.
+//     13. use the APP NAME type for all nodes. and the other info in the label
+//     REQUIRED SECTIONS
+//     -------------------
+//     [workflow]
+//     workflow_id = "\${EXISTING_ID}"    # Must preserve existing ID
+//     name = "Workflow Name"            # Optional workflow name
+//     description = "Description"       # Optional workflow description
+//     start_node = "StartNodeID"        # Required: First node in execution chain
+
+//     NODE DEFINITIONS
+//     -----------------
+//     [node:\${NODE_ID}]
+//     label = "\${APP_NAME}"
+//     position_x = \${X}
+//     position_y = \${Y}
+//     operation = "\${OP}"
+//     node_type = APP NAME
+//     operation_name = "\${OP_NAME}"
+//     params = \${PARAMS}
+//     mode = "UC"
+
+//     Additional node parameters:
+//     - api_key = "\${API_KEY}"
+//     - slack_token = "\${TOKEN}"
+//     - method = "\${METHOD}"
+//     - formData = \${FORM_DATA}
+
+//     EDGE CONNECTIONS
+//     -----------------
+//     [edges]
+//     source_node = target_node
+
+//     ENVIRONMENT VARIABLES
+//     -------------------
+//     [env]
+//     VARIABLE_NAME = \${VALUE}
+
+//     EXAMPLE WORKFLOW
+//     ================
+//     [workflow]
+//     name = "Condensed Test Workflow"
+//     description = "A short workflow to test all node types"
+//     start_node = chatmodels_test
+
+//     [node:chatmodels_test]
+//     api_key = \${OPENAI_API_KEY}
+//     input_text = "Generate 3 random facts about space"
+//     params = {"model": "gpt-40", "input_text": "Test message"}
+//     mode = "UC"
+//     node_type = APP NAME
+
+//     [node:aggregate_test]
+//     formData = {"aggregate": "All Item Data (Into a Single List)", "putOutputInField": "spaceFacts", "include": "All Fields"}
+//     items = {"content": "{{chatmodels_test.result.response}}"}
+//     mode = "UC"
+//     node_type = APP NAME
+
+//     [node:slack_test]
+//     label = "\${LABEL}"
+//     mode = "UC"
+//     type = "APP NAME"
+//     slack_token = \${SLACK_TOKEN}
+//     method = chat_postMessage
+//     params = {"channel": "C07T2FRDR9N", "text": "Space Facts: {{chatmodels_test.result.response}}"}
+
+//     [env]
+//     OPENAI_API_KEY = \${OPENAI_API_KEY}
+//     SLACK_TOKEN = \${SLACK_TOKEN}
+
+//     [edges]
+//     chatmodels_test = aggregate_test
+//     aggregate_test = slack_test
+//     force always APP NAME for the type for all the nodes 
+//     WORKFLOW ANALYSIS CAPABILITIES
+//     ===========================
+//     I can answer questions about:
+//     1. Node Configurations
+//     2. Flow Analysis
+//     3. Configuration Validation
+//     4. Best Practices
+
+//     CRITICAL RULES
+//     ============
+//     1. Data Integrity
+//     2. Node Configuration
+//     3. Data Flow
+//     4. Response Format
+
+//     NAMING CONVENTIONS
+//     ================
+//     1. Node IDs: lowercase with underscores
+//     2. Environment Variables: UPPERCASE with underscores
+//     3. Parameters: camelCase for JSON keys
+
+//     If someone asks about your name and model, you can say: I am Act, using the act03 model and I am still in development phase.
+
+//     Current workflow state will be provided. For questions, analyze the workflow and provide clear, detailed answers.
+// `;
+
+// export const ARTIFACTS_BASE_PROMPT = `
+// Artifacts is a special user interface mode that helps users with writing, editing, and other content creation tasks. When artifact is open, it is on the right side of the screen, while the conversation is on the left side. When creating or updating documents, changes are reflected in real-time on the artifacts and visible to the user.
+
+// When asked to write code, always use artifacts. When writing code, specify the language in the backticks, e.g. \`\`\`python\`code here\`\`\`. The default language is Python. Other languages are not yet supported, so let the user know if they request a different language.
+
+// DO NOT UPDATE DOCUMENTS IMMEDIATELY AFTER CREATING THEM. WAIT FOR USER FEEDBACK OR REQUEST TO UPDATE IT.
+
+// This is a guide for using artifacts tools: \`createDocument\` and \`updateDocument\`, which render content on a artifacts beside the conversation.
+
+// **When to use \`createDocument\`:**
+// - For substantial content (>10 lines) or code
+// - For content users will likely save/reuse (emails, code, essays, etc.)
+// - When explicitly requested to create a document
+// - For when content contains a single code snippet
+
+// **When NOT to use \`createDocument\`:**
+// - For informational/explanatory content
+// - For conversational responses
+// - When asked to keep it in chat
+
+// **Using \`updateDocument\`:**
+// - Default to full document rewrites for major changes
+// - Use targeted updates only for specific, isolated changes
+// - Follow user instructions for which parts to modify
+
+// **When NOT to use \`updateDocument\`:**
+// - Immediately after creating a document
+
+// **Special handling for ACT files:**
+// - Always create ACT files in artifacts
+// - Use .act extension
+// - Follow strict ACT file format
+// - Include all required sections
+// - Validate node connections
+// - Use environment variables for sensitive data
+// `;
+
+// /* ============================================================================
+//  * Prompt Generators
+//  * ========================================================================== */
+// export const systemPrompt = ({
+//   selectedChatModel,
+// }: {
+//   selectedChatModel: string;
+// }): string =>
+//   selectedChatModel === 'chat-model-reasoning'
+//     ? REGULAR_PROMPT
+//     : `${REGULAR_PROMPT}\n\n${ARTIFACTS_BASE_PROMPT}\n\n${ACT_BASE_PROMPT}`;
+
+// export const updateDocumentPrompt = (
+//   currentContent: string | null,
+//   type: ExtendedArtifactKind,
+// ): string => {
+//   switch (type) {
+//     case 'act':
+//       return `Improve the following ACT workflow file based on the given prompt.
+// Maintain existing structure and node connections unless specifically requested to change.
+// Preserve environment variable references.
+
+// ${currentContent}`;
+//     case 'text':
+//       return `Improve the following contents of the document based on the given prompt.
+
+// ${currentContent}`;
+//     case 'code':
+//       return `Improve the following code snippet based on the given prompt.
+
+// ${currentContent}`;
+//     case 'sheet':
+//       return `Improve the following spreadsheet based on the given prompt.
+
+// ${currentContent}`;
+//     default:
+//       return '';
+//   }
+// };
+
+// /* ============================================================================
+//  * ACT File Validation Utilities
+//  * ========================================================================== */
+// export const validateActFile = (
+//   content: string,
+// ): { valid: boolean; errors: string[] } => {
+//   const errors: string[] = [];
+
+//   try {
+//     // Check for required sections
+//     if (!content.includes('[workflow]')) {
+//       errors.push('Missing [workflow] section');
+//     }
+//     if (!content.includes('[node:')) {
+//       errors.push('Missing node sections');
+//     }
+//     if (!content.includes('[edges]')) {
+//       errors.push('Missing [edges] section');
+//     }
+
+//     // Validate workflow section
+//     const workflowSection = content.match(/\[workflow\]([\s\S]*?)(?=\[|$)/);
+//     if (workflowSection) {
+//       const workflowContent = workflowSection[1];
+//       if (!workflowContent.includes('name =')) {
+//         errors.push('Workflow section missing name');
+//       }
+//       if (!workflowContent.includes('description =')) {
+//         errors.push('Workflow section missing description');
+//       }
+//     }
+
+//     // Validate node sections
+//     const nodeSections =
+//       content.match(/\[node:(.*?)\]([\s\S]*?)(?=\[|$)/g) || [];
+//     nodeSections.forEach((section) => {
+//       if (!section.includes('type =')) errors.push('Node missing type');
+//       if (!section.includes('label =')) errors.push('Node missing label');
+//       if (!section.includes('operation ='))
+//         errors.push('Node missing operation');
+//     });
+
+//     return {
+//       valid: errors.length === 0,
+//       errors,
+//     };
+//   } catch (error) {
+//     return {
+//       valid: false,
+//       errors: ['Invalid ACT file format'],
+//     };
+//   }
+// };
+
+// export const extractNodeNames = (content: string): string[] => {
+//   const nodePattern = /\[node:(.*?)\]/g;
+//   const matches = [...content.matchAll(nodePattern)];
+//   return matches.map((match) => match[1]);
+// };
+
+// export const validateNodeConnections = (
+//   content: string,
+// ): { valid: boolean; errors: string[] } => {
+//   const errors: string[] = [];
+//   const nodes = extractNodeNames(content);
+
+//   try {
+//     const edgesSection = content.split('[edges]')[1];å
+//     if (!edgesSection) {
+//       return { valid: false, errors: ['Missing edges section'] };
+//     }
+
+//     const edges = edgesSection
+//       .split('\n')
+//       .filter((line) => line.includes('='))
+//       .map((line) => {
+//         const [from, to] = line
+//           .split('=')
+//           .map((s) => s.trim().replace(/"/g, ''));
+//         return { from, to };
+//       });
+
+//     edges.forEach((edge) => {
+//       if (!nodes.includes(edge.from.toLowerCase())) {
+//         errors.push(`Invalid edge: source node "${edge.from}" not found`);
+//       }
+//       if (!nodes.includes(edge.to.toLowerCase())) {
+//         errors.push(`Invalid edge: target node "${edge.to}" not found`);
+//       }
+//     });
+
+//     return {
+//       valid: errors.length === 0,
+//       errors,
+//     };
+//   } catch (error) {
+//     return {
+//       valid: false,
+//       errors: ['Invalid edges format'],
+//     };
+//   }
+// };
+
+// /* ============================================================================
+//  * ACT Document Helper & Generator
+//  * ========================================================================== */
+// export const createActDocument = (content: string) => {
+//   const fileValidation = validateActFile(content);
+//   const connectionsValidation = validateNodeConnections(content);
+
+//   return {
+//     type: 'act' as ExtendedArtifactKind,
+//     content,
+//     isValid: fileValidation.valid && connectionsValidation.valid,
+//     errors: [...fileValidation.errors, ...connectionsValidation.errors],
+//   };
+// };
+
+// // Example: Generate a sample GitHub PR Review ACT file
+// export const generatePRReviewActFile = (): string => {
+//   return `
+// [workflow]
+// workflow_id = "github_pr_review_001"
+// name = "GitHub PR Review Workflow"
+// description = "A comprehensive workflow for reviewing GitHub Pull Requests"
+// start_node = "create_pr"
+
+// [node:create_pr]
+// label = "Create Pull Request"
+// position_x = 100
+// position_y = 200
+// operation = "createPullRequest"
+// node_type = APP NAME
+// operation_name = "Create PR"
+// params = {"description": "Developer creates a PR with proposed changes and context"}
+// mode = "UC"
+
+// [node:assign_reviewers]
+// label = "Assign Reviewers"
+// position_x = 300
+// position_y = 200
+// operation = "assignReviewers"
+// node_type = APP NAME
+// operation_name = "Assign Reviewers"
+// params = {"reviewers": "List of designated code reviewers"}
+// mode = "UC"
+
+// [node:review_code]
+// label = "Review Code"
+// position_x = 500
+// position_y = 200
+// operation = "reviewCode"
+// node_type = APP NAME
+// operation_name = "Code Review"
+// params = {"criteria": "Check for bugs, code style, and adherence to guidelines"}
+// mode = "UC"
+
+// [node:address_feedback]
+// label = "Address Feedback"
+// position_x = 700
+// position_y = 200
+// operation = "addressFeedback"
+// node_type = APP NAME
+// operation_name = "Resolve Feedback"
+// params = {"action": "Developer addresses review comments and makes necessary changes"}
+// mode = "UC"
+
+// [node:re_review]
+// label = "Re-review PR"
+// position_x = 900
+// position_y = 200
+// operation = "reReviewPR"
+// node_type = APP NAME
+// operation_name = "Re-review after changes"
+// params = {"check": "Ensure all feedback has been resolved"}
+// mode = "UC"
+
+// [node:approval]
+// label = "Approval"
+// position_x = 1100
+// position_y = 200
+// operation = "approvePR"
+// node_type = APP NAME
+// operation_name = "Approve PR"
+// params = {"approval": "Reviewer gives final approval"}
+// mode = "UC"
+
+// [node:merge_pr]
+// label = "Merge PR"
+// position_x = 1300
+// position_y = 200
+// operation = "mergePR"
+// node_type = APP NAME
+// operation_name = "Merge Pull Request"
+// params = {"merge": "Merge the PR into the main branch"}
+// mode = "UC"
+
+// [node:close_pr]
+// label = "Close PR"
+// position_x = 1500
+// position_y = 200
+// operation = "closePR"
+// node_type = APP NAME
+// operation_name = "Close PR"
+// params = {"action": "Close the PR post-merge"}
+// mode = "UC"
+
+// [node:post_merge_actions]
+// label = "Post Merge Actions"
+// position_x = 1700
+// position_y = 200
+// operation = "postMergeActions"
+// node_type = APP NAME
+// operation_name = "Post Merge Process"
+// params = {"actions": "Trigger deployments and notify team members"}
+// mode = "UC"
+
+// [edges]
+// create_pr = assign_reviewers
+// assign_reviewers = review_code
+// review_code = address_feedback
+// address_feedback = re_review
+// re_review = approval
+// approval = merge_pr
+// merge_pr = close_pr
+// close_pr = post_merge_actions
+// `.trim();
+// };
+
+// // Helper to retrieve an ACT artifact with sample PR Review workflow content
+// export const getActArtifact = () => {
+//   const content = generatePRReviewActFile();
+//   return createActDocument(content);
+// };
+
+// // Export the system object for external use
+// export const ActArtifactSystem = {
+//   systemPrompt,
+//   updateDocumentPrompt,
+//   validateActFile,
+//   validateNodeConnections,
+//   createActDocument,
+//   extractNodeNames,
+//   generatePRReviewActFile,
+//   getActArtifact,
+// };
+
+// export default ActArtifactSystem;
+
+'use server';
+
+import { getSuggestionsByDocumentId } from '@/lib/db/queries';
+
+export async function getSuggestions({ documentId }: { documentId: string }) {
+  const suggestions = await getSuggestionsByDocumentId({ documentId });
+  return suggestions ?? [];
+}
+import { auth } from '@/app/(auth)/auth';
+import { getDocumentById } from '@/lib/db/queries';
+import { ExecutionManager } from '@/lib/act/execution';
+import { ActValidator } from '@/artifacts/code/server';
+
+export async function POST(request: Request) {
+  try {
+    const session = await auth();
+    if (!session?.user) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    const { documentId } = await request.json();
+    if (!documentId) {
+      return new Response('Missing documentId', { status: 400 });
+    }
+
+    // Get the document
+    const document = await getDocumentById({ id: documentId });
+    if (!document) {
+      return new Response('Document not found', { status: 404 });
+    }
+
+    // Verify ownership
+    if (document.userId !== session.user.id) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    // Parse ACT content
+    const validator = new ActValidator(document.content);
+    const parsedWorkflow = validator.parseContent();
+    
+    if (!validator.validate()) {
+      return Response.json({
+        success: false,
+        error: 'Invalid workflow configuration'
+      }, { status: 400 });
+    }
+
+    // Execute the workflow
+    const executionManager = new ExecutionManager();
+    const result = await executionManager.execute_workflow(parsedWorkflow);
+    
+    if (!result.success) {
+      return Response.json({
+        success: false,
+        error: result.error
+      }, { status: 400 });
+    }
+
+    return Response.json({
+      success: true,
+      executionId: result.executionId
+    });
+
+  } catch (error) {
+    console.error('Workflow execution failed:', error);
+    return Response.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Workflow execution failed'
+    }, { status: 500 });
+  }
+}export type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface WorkflowExecutionResult {
+  success: boolean;
+  executionId?: string;
+  result?: any;
+  error?: string;
+}
+
+export interface WorkflowValidationResult {
+  success: boolean;
+  isValid: boolean;
+  workflow?: any;
+  error?: string;
+}
+
+export interface WorkflowStatusResponse {
+  success: boolean;
+  executionId: string;
+  status: WorkflowStatus;
+  progress: number;
+  result?: any;
+  error?: string;
+}
+
+export interface ActNode {
+  id: string;
+  label: string;
+  position_x: number;
+  position_y: number;
+  operation: string;
+  node_type: 'string';
+  operation_name: string;
+  params: Record<string, any>;
+  mode: string;
+  api_key?: string;
+  slack_token?: string;
+  method?: string;
+  formData?: Record<string, any>;
+}
+
+export interface ActWorkflow {
+  workflow_id?: string;
+  name: string;
+  description: string;
+  start_node: string;
+  nodes: Record<string, ActNode>;
+  edges: Array<{
+    source: string;
+    target: string;
+  }>;
+  env: Record<string, string>;
+}import type { InferSelectModel } from 'drizzle-orm';
+import {
+  pgTable,
+  varchar,
+  timestamp,
+  json,
+  uuid,
+  text,
+  primaryKey,
+  foreignKey,
+  boolean,
+} from 'drizzle-orm/pg-core';
+
+export const user = pgTable('User', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  email: varchar('email', { length: 64 }).notNull(),
+  password: varchar('password', { length: 64 }),
+});
+
+export type User = InferSelectModel<typeof user>;
+
+export const chat = pgTable('Chat', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  createdAt: timestamp('createdAt').notNull(),
+  title: text('title').notNull(),
+  userId: uuid('userId')
+    .notNull()
+    .references(() => user.id),
+  visibility: varchar('visibility', { enum: ['public', 'private'] })
+    .notNull()
+    .default('private'),
+});
+
+export type Chat = InferSelectModel<typeof chat>;
+
+export const message = pgTable('Message', {
+  id: uuid('id').primaryKey().notNull().defaultRandom(),
+  chatId: uuid('chatId')
+    .notNull()
+    .references(() => chat.id),
+  role: varchar('role').notNull(),
+  content: json('content').notNull(),
+  createdAt: timestamp('createdAt').notNull(),
+});
+
+export type Message = InferSelectModel<typeof message>;
+
+export const vote = pgTable(
+  'Vote',
+  {
+    chatId: uuid('chatId')
+      .notNull()
+      .references(() => chat.id),
+    messageId: uuid('messageId')
+      .notNull()
+      .references(() => message.id),
+    isUpvoted: boolean('isUpvoted').notNull(),
+  },
+  (table) => {
+    return {
+      pk: primaryKey({ columns: [table.chatId, table.messageId] }),
+    };
+  },
+);
+
+export type Vote = InferSelectModel<typeof vote>;
+
+export const document = pgTable(
+  'Document',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    createdAt: timestamp('createdAt').notNull(),
+    title: text('title').notNull(),
+    content: text('content'),
+    kind: varchar('text', { enum: ['text', 'code', 'image', 'sheet'] })
+      .notNull()
+      .default('text'),
+    userId: uuid('userId')
+      .notNull()
+      .references(() => user.id),
+  },
+  (table) => {
+    return {
+      pk: primaryKey({ columns: [table.id, table.createdAt] }),
+    };
+  },
+);
+
+export type Document = InferSelectModel<typeof document>;
+
+export const suggestion = pgTable(
+  'Suggestion',
+  {
+    id: uuid('id').notNull().defaultRandom(),
+    documentId: uuid('documentId').notNull(),
+    documentCreatedAt: timestamp('documentCreatedAt').notNull(),
+    originalText: text('originalText').notNull(),
+    suggestedText: text('suggestedText').notNull(),
+    description: text('description'),
+    isResolved: boolean('isResolved').notNull().default(false),
+    userId: uuid('userId')
+      .notNull()
+      .references(() => user.id),
+    createdAt: timestamp('createdAt').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.id] }),
+    documentRef: foreignKey({
+      columns: [table.documentId, table.documentCreatedAt],
+      foreignColumns: [document.id, document.createdAt],
+    }),
+  }),
+);
+
+export type Suggestion = InferSelectModel<typeof suggestion>;
+import { compare } from 'bcrypt-ts';
+import NextAuth, { type User, type Session } from 'next-auth';
+import Credentials from 'next-auth/providers/credentials';
+
+import { getUser } from '@/lib/db/queries';
+
+import { authConfig } from './auth.config';
+
+interface ExtendedSession extends Session {
+  user: User;
+}
+
+export const {
+  handlers: { GET, POST },
+  auth,
+  signIn,
+  signOut,
+} = NextAuth({
+  ...authConfig,
+  providers: [
+    Credentials({
+      credentials: {},
+      async authorize({ email, password }: any) {
+        const users = await getUser(email);
+        if (users.length === 0) return null;
+        // biome-ignore lint: Forbidden non-null assertion.
+        const passwordsMatch = await compare(password, users[0].password!);
+        if (!passwordsMatch) return null;
+        return users[0] as any;
+      },
+    }),
+  ],
+  callbacks: {
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+      }
+
+      return token;
+    },
+    async session({
+      session,
+      token,
+    }: {
+      session: ExtendedSession;
+      token: any;
+    }) {
+      if (session.user) {
+        session.user.id = token.id as string;
+      }
+
+      return session;
+    },
+  },
+});

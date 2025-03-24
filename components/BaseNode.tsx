@@ -66,7 +66,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
 
   // Derived state
   const isDarkMode = theme === 'dark' || (theme === 'system' && systemTheme === 'dark');
-  const isUCMode = data?.formData?.mode === 'UC';
+  const isUCMode = data mode = 'UC';
   
   // Check if node is currently executing
   const isExecuting = data?.executionStatus === 'executing';
@@ -288,8 +288,6 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     // If node is executing, return an amber highlight
     if (isExecuting) {
       return {
-        border: '1px solid rgb(245, 158, 11)',
-        boxShadow: '0 0 0 5px rgba(245, 158, 11, 0.3)'
       };
     }
 
@@ -298,8 +296,6 @@ const BaseNode: FC<BaseNodeProps> = memo(({
       const baseStyle = { border: '0.5px solid' };
       const styleWithShadow = (borderColor: string, shadowColor: string) => ({
         ...baseStyle,
-        borderColor,
-        boxShadow: `0 0 0 ${selected ? '4px' : '2px'} ${shadowColor}`
       });
 
       switch (executionStatus) {
@@ -315,7 +311,7 @@ const BaseNode: FC<BaseNodeProps> = memo(({
     }
 
     // Fall back to original styling if no execution status
-    const baseStyle = { border: '1px solid rgb(40, 42, 41)' };
+    const baseStyle = {  };
     const styleWithShadow = (color: string) => ({
       ...baseStyle,
       boxShadow: `0 0 0 ${selected ? '6px' : '5px'} ${color}`
@@ -804,7 +800,6 @@ const BaseNode: FC<BaseNodeProps> = memo(({
               {/* Add spinner when node is executing */}
               {isExecuting && (
                 <div className="executing-spinner">
-                  <Loader2 className="h-8 w-8 text-amber-500 animate-spin absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
                 </div>
               )}
               
@@ -909,8 +904,6 @@ const BaseNode: FC<BaseNodeProps> = memo(({
           display: flex;
           align-items: center;
           justify-content: center;
-          border: 1px solid #e2e8f0;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
           z-index: 5;
           cursor: pointer;
           transition: transform 0.2s, box-shadow 0.2s;

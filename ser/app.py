@@ -735,7 +735,85 @@ def container_execute():
             'status': 'error',
             'error': error_msg
         }), 500
+@app.route('/container/execute-node', methods=['POST'])
+def container_execute_node():
+    """Execute a single node in a specific container."""
+    try:
+        if docker_client is None:
+            return jsonify({
+                'status': 'error',
+                'error': 'Docker client not initialized'
+            }), 500
+            
+        data = request.json
+        if not data or 'artifactId' not in data or 'nodeId' not in data or 'content' not in data:
+            return jsonify({
+                'status': 'error',
+                'error': 'Missing artifactId, nodeId, or content'
+            }), 400
+        
+        artifact_id = data['artifactId']
+        node_id = data['nodeId']
+        logger.info(f"Requested single node execution for artifact: {artifact_id}, node: {node_id}")
+        
+        # Get container info
+        container_info = containers.get(artifact_id)
+        if not container_info:
+            logger.warning(f"Container for artifact {artifact_id} not found")
+            return jsonify({
+                'status': 'error',
+                'error': 'Container not found'
+            }), 404
+            
+        if container_info.status != 'running':
+            logger.warning(f"Container for artifact {artifact_id} is not running: {container_info.status}")
+            return jsonify({
+                'status': 'error',
+                'error': f'Container is not running: {container_info.status}'
+            }), 400
 
+        try:
+            # Forward execution request to worker container
+            logger.info(f"Forwarding node execution request to container on port {container_info.port}")
+            
+            # The worker container should handle single node execution
+            response = requests.post(
+                f"http://localhost:{container_info.port}/execute-node",
+                json={
+                    'workflow': data['content'],
+                    'nodeId': node_id,
+                    'executionId': data.get('executionId', f"node-{node_id}-{int(time.time())}")
+                },
+                timeout=30  # Longer timeout for node execution
+            )
+            
+            if response.ok:
+                result = response.json()
+                logger.info(f"Node execution completed: {result.get('status', 'unknown')}")
+                return result
+            else:
+                error_msg = f'Worker error: {response.text}'
+                logger.error(f"Node execution request failed: {error_msg}")
+                return jsonify({
+                    'status': 'error',
+                    'error': error_msg
+                }), response.status_code
+                
+        except requests.exceptions.RequestException as e:
+            error_msg = f'Failed to execute node: {str(e)}'
+            logger.error(error_msg)
+            return jsonify({
+                'status': 'error',
+                'error': error_msg
+            }), 500
+            
+    except Exception as e:
+        error_msg = f"Node execution error: {str(e)}"
+        logger.error(error_msg)
+        return jsonify({
+            'status': 'error',
+            'error': error_msg
+        }), 500
 def cleanup_on_shutdown():
     """Clean up all containers on server shutdown."""
     if docker_client is None:

@@ -47,7 +47,7 @@ User question: ${question}
 
 Provide a direct, technical answer to the user's question based only on this ACT configuration file.
 Explain concepts clearly and reference specific parts of the configuration when relevant.`,
-      maxTokens: 1500,
+      maxTokens: 60500,
       temperature: 0.1,
     });
 

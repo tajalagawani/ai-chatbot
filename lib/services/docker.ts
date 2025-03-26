@@ -17,6 +17,16 @@ export interface ExecutionStatus {
   error?: string;
 }
 
+export interface NodeExecutionResult {
+  nodeId: string;
+  status: 'success' | 'failed';
+  operation?: string;
+  result?: any;
+  error?: string;
+  executionId?: string;
+  duration?: number;
+}
+
 class DockerService {
   private static instance: DockerService;
   private containerStatus: Map<string, ContainerInfo>;
@@ -71,8 +81,6 @@ class DockerService {
       if (!artifactId || artifactId.trim() === '') {
         throw new Error('Invalid or missing artifact ID');
       }
-
-   
 
       // Check for existing running container
       const existingContainer = this.containerStatus.get(artifactId);
@@ -187,6 +195,7 @@ class DockerService {
     }
   }
 
+  // Execute whole workflow
   public async executeWorkflow(artifactId: string, content: string) {
     console.log('Executing workflow for artifact:', artifactId);
     try {
@@ -213,7 +222,8 @@ class DockerService {
       );
 
       if (!response.ok) {
-        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+        const errorText = await response.text();
+        throw new Error(`HTTP error ${response.status}: ${errorText}`);
       }
 
       const result = await response.json();
@@ -240,6 +250,198 @@ class DockerService {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error(`Execution failed: ${errorMessage}`);
       throw error;
+    }
+  }
+
+  // Simple method to execute a single node by using the full workflow execution
+  public async executeSingleNode(
+    artifactId: string, 
+    nodeId: string, 
+    workflowContent: string
+  ): Promise<NodeExecutionResult> {
+    console.log(`Executing single node ${nodeId} for artifact ${artifactId}`);
+    try {
+      if (!artifactId) {
+        throw new Error('Missing artifact ID');
+      }
+      
+      if (!nodeId) {
+        throw new Error('Missing node ID');
+      }
+      
+      if (!workflowContent) {
+        throw new Error('Missing workflow content');
+      }
+
+      const containerInfo = this.containerStatus.get(artifactId);
+      if (!containerInfo?.containerId || containerInfo.status !== 'running') {
+        throw new Error('Container is not running');
+      }
+
+      // Extract node section and create single-node workflow
+      const singleNodeWorkflow = this.extractNodeWorkflow(workflowContent, nodeId);
+      if (!singleNodeWorkflow) {
+        throw new Error(`Node ${nodeId} not found in workflow content`);
+      }
+
+      // Execute the single node as a full workflow
+      console.log(`Executing node ${nodeId} as a standalone workflow`);
+      
+      // Execute the workflow
+      const response = await fetch(
+        `http://localhost:${containerInfo.port}/execute`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: singleNodeWorkflow }),
+          signal: AbortSignal.timeout(30000) // 30 second timeout
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error ${response.status}: ${errorText}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.status !== 'accepted' || !result.execution_id) {
+        throw new Error('Failed to start node execution');
+      }
+      
+      // Poll for execution status
+      console.log(`Waiting for node execution to complete (ID: ${result.execution_id})`);
+      const nodeResult = await this.waitForNodeExecution(containerInfo.port, result.execution_id, nodeId);
+      
+      console.log(`Node execution result:`, nodeResult);
+      
+      // Create a result compatible with what the AI expects
+      const nodeOperation = this.extractNodeOperation(workflowContent, nodeId);
+      
+      return {
+        nodeId,
+        status: nodeResult.status === 'completed' ? 'success' : 'failed',
+        operation: nodeOperation || nodeId,
+        result: nodeResult.results?.[nodeId]?.result || nodeResult.result || null,
+        error: nodeResult.error || nodeResult.results?.[nodeId]?.error || null,
+        executionId: result.execution_id,
+        duration: nodeResult.results?.[nodeId]?.duration || 0
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`Node execution failed: ${errorMessage}`);
+      
+      return {
+        nodeId,
+        status: 'failed',
+        error: errorMessage
+      };
+    }
+  }
+
+  // Helper method to extract operation type from node
+  private extractNodeOperation(workflowContent: string, nodeId: string): string {
+    try {
+      const nodeRegex = new RegExp(`\\[node:${nodeId}\\]([\\s\\S]*?)(?=\\[node:|\\[edges|$)`);
+      const nodeMatch = workflowContent.match(nodeRegex);
+      
+      if (!nodeMatch) {
+        return nodeId;
+      }
+      
+      const nodeContent = nodeMatch[0];
+      const operationMatch = nodeContent.match(/operation\s*=\s*([^\n]+)/);
+      
+      if (operationMatch) {
+        return operationMatch[1].trim();
+      }
+      
+      return nodeId;
+    } catch (error) {
+      console.error(`Error extracting node operation for ${nodeId}:`, error);
+      return nodeId;
+    }
+  }
+
+  // Helper method to wait for a node execution to complete
+  private async waitForNodeExecution(port: number, executionId: string, nodeId: string, timeout = 25000): Promise<any> {
+    const startTime = Date.now();
+    let lastError = null;
+    
+    while (Date.now() - startTime < timeout) {
+      try {
+        const response = await fetch(
+          `http://localhost:${port}/status/${executionId}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        
+        if (!response.ok) {
+          console.log(`Status check failed with HTTP ${response.status}`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
+        
+        const data = await response.json();
+        
+        if (data.status === 'completed' || data.status === 'failed') {
+          console.log(`Node execution ${data.status}`);
+          
+          // For debugging purposes
+          console.log(`Raw execution result:`, JSON.stringify(data, null, 2));
+          
+          return data;
+        }
+        
+        console.log(`Node execution in progress: ${data.status}`);
+      } catch (error) {
+        console.error('Error checking node execution status:', error);
+        lastError = error;
+      }
+      
+      // Wait before polling again
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    throw new Error(`Node execution timed out after ${timeout}ms` + (lastError ? `: ${lastError.message}` : ''));
+  }
+
+  // Helper method to extract a single node workflow
+  private extractNodeWorkflow(workflowContent: string, nodeId: string): string {
+    try {
+      // Extract parameters section
+      const parametersMatch = workflowContent.match(/\[parameters\]([\s\S]*?)(?=\[|$)/);
+      const parameters = parametersMatch ? parametersMatch[0] : '[parameters]\n';
+      
+      // Extract workflow section
+      const workflowMatch = workflowContent.match(/\[workflow\]([\s\S]*?)(?=\[|$)/);
+      const workflow = workflowMatch 
+        ? workflowMatch[0].replace(/start_node\s*=\s*[^\n]+/, `start_node = ${nodeId}`) 
+        : `[workflow]\nname = Single Node Execution\nstart_node = ${nodeId}\n`;
+      
+      // Extract settings section
+      const settingsMatch = workflowContent.match(/\[settings\]([\s\S]*?)(?=\[|$)/);
+      const settings = settingsMatch ? settingsMatch[0] : '[settings]\ndebug = true\n';
+      
+      // Extract env section
+      const envMatch = workflowContent.match(/\[env\]([\s\S]*?)(?=\[|$)/);
+      const env = envMatch ? envMatch[0] : '[env]\n';
+      
+      // Extract the target node
+      const nodeRegex = new RegExp(`\\[node:${nodeId}\\]([\\s\\S]*?)(?=\\[node:|\\[edges|$)`);
+      const nodeMatch = workflowContent.match(nodeRegex);
+      
+      if (!nodeMatch) {
+        console.error(`Node ${nodeId} not found in workflow content`);
+        return null;
+      }
+      
+      const nodeSection = nodeMatch[0];
+      
+      // Compose the single-node workflow
+      return `${parameters}\n${workflow}\n${nodeSection}\n[edges]\n\n${settings}\n${env}`;
+    } catch (error) {
+      console.error('Error extracting node workflow:', error);
+      return null;
     }
   }
 
@@ -330,6 +532,7 @@ class DockerService {
             };
           }
         } catch (directError) {
+          // Fall through to manager health check
         }
       }
 

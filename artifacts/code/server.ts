@@ -638,7 +638,7 @@ export const codeDocumentHandler = createDocumentHandler<'code'>({
         schema: z.object({
           content: z.string(),
         }),
-        maxTokens: 40000,
+        maxTokens: 60000,
         temperature: 0.1
       });
 

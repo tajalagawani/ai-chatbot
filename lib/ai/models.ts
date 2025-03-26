@@ -13,14 +13,14 @@ export const DEFAULT_CHAT_MODEL: string = 'chat-model-small';
 export const myProvider = customProvider({
   languageModels: {
     // Replace with Gemini 2.0 model
-    'chat-model-small': google('gemini-2.0-flash-exp-image-generation'),
-    'chat-model-large': google('gemini-2.0-flash-exp-image-generation'),
-    'artifact-model': google('gemini-2.0-flash-exp-image-generation'),
+    'chat-model-small': google('gemini-2.5-pro-exp-03-25'),
+    'chat-model-large': google('gemini-2.5-pro-exp-03-25'),
+    'artifact-model': google('gemini-2.5-pro-exp-03-25'),
     'chat-model-reasoning': wrapLanguageModel({
       model: fireworks('accounts/fireworks/models/deepseek-r1'),
       middleware: extractReasoningMiddleware({ tagName: 'think' }),
     }),
-    'title-model': google('gemini-2.0-flash-exp-image-generation'),
+    'title-model': google('gemini-2.5-pro-exp-03-25'),
   },
   // No imageModels section as it's not supported in the same way
 });

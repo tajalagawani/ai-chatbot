@@ -37,7 +37,7 @@ ${document.content}
 User question: ${question}
 
 Provide a direct answer to the user's question based only on the document content.`,
-      maxTokens: 1000,
+      maxTokens: 50000,
       temperature: 0.2,
     });
 

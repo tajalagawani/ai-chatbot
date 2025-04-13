@@ -1297,7 +1297,7 @@ const edgeTypes = useMemo<EdgeTypes>(() => ({
 const proOptions = { hideAttribution: true };
 
 return (
-  <div className="w-full h-[100%] relative">
+  <div className="w-full h-[93%] relative">
     <ReactFlow
       nodes={nodes}
       edges={edges}
@@ -1322,10 +1322,10 @@ return (
       proOptions={proOptions} // Add this prop to hide the ReactFlow watermark
     >
       <Background
-        color={isDarkTheme ? "#5b5b5b" : "#aaaaaa"}
+        color={isDarkTheme ? "#ffffffb5" : "#aaaaaa"}
         gap={20}
         style={{ 
-          backgroundColor: isDarkTheme ? '#040404 ' : '#4f4f4f' 
+          backgroundColor: isDarkTheme ? '#16161982 ' : '#16161982' 
         }}
       />
       
@@ -1441,7 +1441,7 @@ return (
     
     {/* Unsaved changes indicator */}
     {hasUnsavedChanges && status !== 'updating' && (
-      <div className="absolute top-4 right-4 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1 rounded-md text-sm flex items-center z-10">
+      <div className="absolute top-4 right-6 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1 rounded-md text-sm flex items-center z-10">
         <span>Unsaved changes</span>
       </div>
     )}

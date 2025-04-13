@@ -194,6 +194,109 @@ def cleanup_old_executions():
                     oldest_exec = sorted(execution_history.keys())[0]
                     del execution_history[oldest_exec]
 
+def make_json_serializable(obj):
+    """Recursively convert objects to JSON serializable types."""
+    if obj is None:
+        return None
+    elif isinstance(obj, (str, int, float, bool)):
+        return obj
+    elif isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return [make_json_serializable(item) for item in obj]
+    elif str(type(obj)).find('GenerateContentResponse') > -1:
+        # Special handling for Gemini responses
+        try:
+            # Try different ways to extract text
+            if hasattr(obj, 'candidates') and obj.candidates:
+                # Typical structure for Gemini response
+                for candidate in obj.candidates:
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                return {"text": part.text, "type": "gemini_response"}
+            
+            # If we couldn't extract using the object structure, try common attributes
+            if hasattr(obj, 'text'):
+                return {"text": obj.text, "type": "gemini_response"}
+            elif hasattr(obj, 'result_text'):
+                return {"text": obj.result_text, "type": "gemini_response"}
+            
+            # Last resort: stringify the whole object
+            return {"text": str(obj), "type": "gemini_response"}
+        except Exception as e:
+            logger.error(f"Error serializing Gemini response: {e}")
+            return {"text": "Error processing Gemini response", "type": "gemini_response"}
+    else:
+        # For any other object, convert to string
+        return str(obj)
+
+def resolve_node_references(all_node_results, current_scope):
+    """Recursively resolve placeholder references between nodes in the results dictionary."""
+    if not isinstance(current_scope, dict):
+        return
+    
+    # Check each node result in the current scope
+    for key, value in current_scope.items():
+        if isinstance(value, dict):
+            # For dictionaries, check for references and recursively process
+            resolve_node_references(all_node_results, value)
+            
+            # Check specifically for 'value' field in set node results
+            if 'key' in value and 'value' in value:
+                val = value['value']
+                if isinstance(val, str) and val.startswith('{{') and val.endswith('}}'):
+                    # This looks like an unresolved placeholder
+                    placeholder = val[2:-2].strip()  # Remove {{ }}
+                    
+                    # Split into node name and path
+                    parts = placeholder.split('.')
+                    if len(parts) >= 2:
+                        node_name = parts[0]
+                        path = '.'.join(parts[1:])
+                        
+                        # Try to resolve from the all_node_results
+                        if node_name in all_node_results:
+                            node_data = all_node_results[node_name]
+                            
+                            # Navigate the path
+                            current = node_data
+                            path_parts = path.split('.')
+                            resolved = True
+                            
+                            for part in path_parts:
+                                if isinstance(current, dict) and part in current:
+                                    current = current[part]
+                                else:
+                                    # Path not found
+                                    resolved = False
+                                    break
+                            
+                            if resolved:
+                                # Successfully resolved the reference
+                                value['value'] = current
+                                value['resolved_from_placeholder'] = val
+        
+        elif isinstance(value, list):
+            # For lists, process each item
+            for item in value:
+                if isinstance(item, dict):
+                    resolve_node_references(all_node_results, item)
+
+def process_result_for_output(result):
+    """Process the result dictionary to make it JSON serializable and resolve placeholders."""
+    # First, make everything JSON serializable
+    serializable_result = make_json_serializable(result)
+    
+    # Then resolve any placeholder references between nodes
+    if isinstance(serializable_result, dict) and 'results' in serializable_result:
+        node_results = serializable_result.get('results', {})
+        resolve_node_references(node_results, node_results)
+        
+    return serializable_result
+
 def process_execution_queue():
     """Process queued executions."""
     while True:
@@ -292,8 +395,6 @@ def execute_workflow():
             'error': f"Unexpected error: {str(e)}"
         }), 500
 
-# Add these changes to your flask app (worker.py)
-
 @app.route('/status/<execution_id>')
 def execution_status(execution_id):
     """Get status of a specific execution with node tracking."""
@@ -315,15 +416,20 @@ def execution_status(execution_id):
         # If executor is accessible, get detailed node status
         executor = getattr(execution, 'executor', None)
         if executor and hasattr(executor, 'get_execution_status'):
-            # Get detailed status including current node and node statuses
-            detailed_status = executor.get_execution_status()
-            response['current_node'] = detailed_status.get('current_node')
-            response['executed_nodes'] = detailed_status.get('executed_nodes', [])
-            response['node_status'] = detailed_status.get('node_status', {})
+            try:
+                # Get detailed status including current node and node statuses
+                detailed_status = executor.get_execution_status()
+                response['current_node'] = detailed_status.get('current_node')
+                response['executed_nodes'] = detailed_status.get('executed_nodes', [])
+                response['node_status'] = detailed_status.get('node_status', {})
+            except Exception as e:
+                logger.warning(f"Could not get detailed execution status: {e}")
         
         # Add execution result if completed
-        if execution.status == 'completed':
-            response['result'] = execution.result
+        if execution.status == 'completed' and execution.result:
+            # Process to make JSON serializable and resolve references
+            serializable_result = process_result_for_output(execution.result)
+            response['result'] = serializable_result
         elif execution.status == 'failed':
             response['error'] = execution.error
             
@@ -473,6 +579,34 @@ def health_check():
             'status': 'error',
             'error': str(e)
         }), 500
+
+@app.route('/node-status/<execution_id>')
+def node_status(execution_id):
+    """Get detailed node status for an execution."""
+    try:
+        execution = active_executions.get(execution_id)
+        if not execution:
+            return jsonify({
+                'status': 'error',
+                'error': 'Execution not found'
+            }), 404
+            
+        response = {
+            'execution_id': execution.id,
+            'status': execution.status,
+            'current_node': execution.current_node,
+            'executed_nodes': execution.executed_nodes,
+            'node_status': execution.node_status
+        }
+        
+        return jsonify(response)
+    except Exception as e:
+        logger.error(f"Error getting node status: {e}")
+        return jsonify({
+            'status': 'error',
+            'error': f"Failed to get node status: {str(e)}"
+        }), 500
+
 if __name__ == '__main__':
     logger.info(f"Starting worker on port {PORT}")
     logger.info(f"Artifact ID: {ARTIFACT_ID}")

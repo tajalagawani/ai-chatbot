@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Network, Layout, Maximize2, Minimize2, Loader2, AlertCircle } from 'lucide-react';
-import { Terminal, X, ChevronUp, ChevronDown } from 'lucide-react'; // Added ChevronDown
+import { Terminal, X, ChevronUp, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { useWindowSize } from 'usehooks-ts';
 import { Button } from '@/components/ui/button';
@@ -46,7 +46,7 @@ const codeArtifact = {
         executionResult: null,
         showFlowOption: true,
         isFlowFullscreen: false,
-        isStreaming: false, // Add isStreaming flag to metadata
+        isStreaming: false,
         outputs: [{
           id: generateUUID(),
           contents: [{
@@ -55,9 +55,10 @@ const codeArtifact = {
           }],
           status: isDockerHealthy ? 'completed' : 'failed'
         }],
+        // Expose formatted events for the main Artifact console
+        consoleEvents: [`[INFO] Docker status: ${isDockerHealthy ? 'ready' : 'unavailable'}`],
         dockerStatus: isDockerHealthy ? 'ready' : 'unavailable',
         lastError: null,
-        // Add console state
         consoleExpanded: false
       };
   
@@ -93,9 +94,10 @@ const codeArtifact = {
           }],
           status: 'failed'
         }],
+        // Expose formatted events for the main Artifact console
+        consoleEvents: [`[ERROR] Initialization error: ${errorMessage}`],
         dockerStatus: 'unavailable',
         lastError: errorMessage,
-        // Add console state
         consoleExpanded: false
       });
   
@@ -206,6 +208,9 @@ const codeArtifact = {
       
       // Log to confirm content was updated
       console.log('Content updated from flow:', updatedContent.substring(0, 100) + '...');
+      
+      // Add flow update event to consoleEvents
+      addConsoleEvent('FLOW', 'Content updated from flow');
     }, [onSaveContent]);
 
     // Define a custom toggle handler that uses the ref for current state
@@ -245,7 +250,39 @@ const codeArtifact = {
           viewMode: newViewMode
         };
       });
+      
+      // Add view toggle event to consoleEvents
+      addConsoleEvent('INFO', `View changed from ${currentViewMode} to ${newViewMode}`);
     }, [setMetadata, flowContentUpdated]);
+
+    // Helper function to add console events
+    const addConsoleEvent = useCallback((type, message) => {
+      const timestamp = new Date().toISOString().slice(11, 19); // Extract time HH:MM:SS
+      const formattedMessage = `[${timestamp}][${type}] ${message}`;
+      
+      setMetadata(prev => {
+        // Add to console outputs
+        const newOutput = {
+          id: generateUUID(),
+          contents: [{
+            type: 'text',
+            value: `> ${message}`
+          }],
+          status: type === 'ERROR' ? 'failed' : type === 'WARNING' ? 'warning' : 'completed'
+        };
+        
+        // Ensure consoleEvents array exists
+        const currentEvents = prev.consoleEvents || [];
+        
+        return {
+          ...prev,
+          // Add to our outputs array
+          outputs: [...(prev.outputs || []), newOutput],
+          // Also add to the consoleEvents array for the main Artifact
+          consoleEvents: [...currentEvents, formattedMessage],
+        };
+      });
+    }, [setMetadata]);
 
     // Toggle console expanded state
     const toggleConsole = useCallback(() => {
@@ -257,18 +294,22 @@ const codeArtifact = {
 
     // Clear console outputs
     const clearConsole = useCallback(() => {
+      const dockerStatusMessage = `Console cleared. Docker status: ${metadata?.dockerStatus || 'unknown'}`;
+      
       setMetadata(prev => ({
         ...prev,
         outputs: [{
           id: generateUUID(),
           contents: [{
             type: 'text',
-            value: `> Console cleared. Docker status: ${prev.dockerStatus || 'unknown'}`
+            value: `> ${dockerStatusMessage}`
           }],
           status: 'completed'
-        }]
+        }],
+        // Also clear the shared consoleEvents array, but add the clear message
+        consoleEvents: [`[INFO] ${dockerStatusMessage}`]
       }));
-    }, [setMetadata]);
+    }, [setMetadata, metadata?.dockerStatus]);
 
     // Monitor execution status
     useEffect(() => {
@@ -287,41 +328,60 @@ const codeArtifact = {
           
           const data = await response.json();
           
-          setMetadata(prev => ({
-            ...prev,
-            outputs: [
-              ...(prev.outputs || []),
-              {
+          const statusMessage = `Execution status: ${data.status}${data.message ? ` - ${data.message}` : ''}`;
+          
+          setMetadata(prev => {
+            // Create new output for internal console
+            const newOutput = {
+              id: generateUUID(),
+              contents: [{
+                type: 'text',
+                value: `> ${statusMessage}`
+              }],
+              status: 'in_progress'
+            };
+            
+            // Prepare formatted message for main console
+            const timestamp = new Date().toISOString().slice(11, 19);
+            const formattedMessage = `[${timestamp}][STATUS] ${statusMessage}`;
+            
+            return {
+              ...prev,
+              outputs: [...(prev.outputs || []), newOutput],
+              consoleEvents: [...(prev.consoleEvents || []), formattedMessage]
+            };
+          });
+          
+          if (data.status === 'completed' || data.status === 'failed') {
+            const resultMessage = data.status === 'completed' 
+              ? `Execution completed: ${JSON.stringify(data.result, null, 2)}`
+              : `Execution failed: ${data.message || data.error || 'Unknown error'}`;
+              
+            setMetadata(prev => {
+              // Create new output for internal console
+              const newOutput = {
                 id: generateUUID(),
                 contents: [{
                   type: 'text',
-                  value: `> Execution status: ${data.status}${data.message ? ` - ${data.message}` : ''}`
+                  value: `> ${resultMessage}`
                 }],
-                status: 'in_progress'
-              }
-            ]
-          }));
-          
-          if (data.status === 'completed' || data.status === 'failed') {
-            setMetadata(prev => ({
-              ...prev,
-              executionId: null,
-              executionStatus: data.status,
-              containerStatus: 'running',
-              outputs: [
-                ...(prev.outputs || []),
-                {
-                  id: generateUUID(),
-                  contents: [{
-                    type: 'text',
-                    value: data.status === 'completed' 
-                      ? `> Execution completed: ${JSON.stringify(data.result, null, 2)}`
-                      : `> Execution failed: ${data.message || data.error || 'Unknown error'}`
-                  }],
-                  status: data.status === 'completed' ? 'completed' : 'failed'
-                }
-              ]
-            }));
+                status: data.status === 'completed' ? 'completed' : 'failed'
+              };
+              
+              // Prepare formatted message for main console
+              const timestamp = new Date().toISOString().slice(11, 19);
+              const eventType = data.status === 'completed' ? 'SUCCESS' : 'ERROR';
+              const formattedMessage = `[${timestamp}][${eventType}] ${resultMessage}`;
+              
+              return {
+                ...prev,
+                executionId: null,
+                executionStatus: data.status,
+                containerStatus: 'running',
+                outputs: [...(prev.outputs || []), newOutput],
+                consoleEvents: [...(prev.consoleEvents || []), formattedMessage]
+              };
+            });
 
             setIsExecuting(false);
             toast(data.status === 'completed' ? 'Execution completed' : 'Execution failed');
@@ -332,20 +392,28 @@ const codeArtifact = {
           console.error('Error checking execution status:', error);
           const errorMessage = error instanceof Error ? error.message : 'Unknown status check error';
           
-          setMetadata(prev => ({
-            ...prev,
-            outputs: [
-              ...(prev.outputs || []),
-              {
-                id: generateUUID(),
-                contents: [{
-                  type: 'text',
-                  value: `> Error checking status: ${errorMessage}`
-                }],
-                status: 'failed'
-              }
-            ]
-          }));
+          // Add error to both internal console and shared consoleEvents
+          setMetadata(prev => {
+            // Create new output for internal console
+            const newOutput = {
+              id: generateUUID(),
+              contents: [{
+                type: 'text',
+                value: `> Error checking status: ${errorMessage}`
+              }],
+              status: 'failed'
+            };
+            
+            // Prepare formatted message for main console
+            const timestamp = new Date().toISOString().slice(11, 19);
+            const formattedMessage = `[${timestamp}][ERROR] Error checking status: ${errorMessage}`;
+            
+            return {
+              ...prev,
+              outputs: [...(prev.outputs || []), newOutput],
+              consoleEvents: [...(prev.consoleEvents || []), formattedMessage]
+            };
+          });
         }
       };
 
@@ -364,12 +432,15 @@ const codeArtifact = {
             ...prev,
             isFlowFullscreen: false
           }));
+          
+          // Log fullscreen exit to console
+          addConsoleEvent('INFO', 'Exited fullscreen mode with Escape key');
         }
       };
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [metadata?.isFlowFullscreen, setMetadata]);
+    }, [metadata?.isFlowFullscreen, setMetadata, addConsoleEvent]);
 
     // Ensure flow changes are saved when switching views
     useEffect(() => {
@@ -377,8 +448,11 @@ const codeArtifact = {
         console.log('Detected switch to code view with pending flow changes, ensuring they are saved');
         toast.info('Flow changes applied to code view');
         setFlowContentUpdated(false);
+        
+        // Log flow changes applied to console
+        addConsoleEvent('INFO', 'Flow changes applied to code view');
       }
-    }, [viewMode, flowContentUpdated]);
+    }, [viewMode, flowContentUpdated, addConsoleEvent]);
 
     // Add direct console log to check metadata state at runtime
     useEffect(() => {
@@ -421,6 +495,19 @@ const codeArtifact = {
             // Update our local state and ref too
             setViewMode('flow');
             metadataViewModeRef.current = 'flow';
+            
+            // Log view mode detection to console
+            const consoleEvents = prev.consoleEvents || [];
+            const timestamp = new Date().toISOString().slice(11, 19);
+            const formattedMessage = `[${timestamp}][INFO] ACT content detected, switching to flow view`;
+            
+            return {
+              ...prev,
+              // Keep showFlowOption true even if not ACT content
+              showFlowOption: true,
+              viewMode: newViewMode,
+              consoleEvents: [...consoleEvents, formattedMessage]
+            };
           }
           
           return {
@@ -436,6 +523,11 @@ const codeArtifact = {
         }
       } catch (error) {
         console.error('Failed to parse ACT file:', error);
+        
+        // Log parse error to console
+        const errorMessage = error instanceof Error ? error.message : 'Unknown parsing error';
+        addConsoleEvent('ERROR', `Failed to parse ACT file: ${errorMessage}`);
+        
         setMetadata(prev => ({
           ...prev,
           flowData: null,
@@ -444,7 +536,7 @@ const codeArtifact = {
           showFlowOption: true
         }));
       }
-    }, [content, setMetadata, initialViewSet]);
+    }, [content, setMetadata, initialViewSet, addConsoleEvent]);
 
     // Add direct toggle support for custom actions
     useEffect(() => {
@@ -465,26 +557,31 @@ const codeArtifact = {
     }, [handleToggleView]);
 
     // Ensure there's always at least one console output
-// Ensure there's always at least one console output
-useEffect(() => {
-  if (!metadata?.outputs || metadata.outputs.length === 0) {
-    setMetadata(prev => {
-      // Add null check for prev
-      const dockerStatus = prev?.dockerStatus || 'unknown';
-      return {
-        ...(prev || {}), // Use empty object if prev is undefined
-        outputs: [{
-          id: generateUUID(),
-          contents: [{
-            type: 'text',
-            value: `> Console ready. Docker status: ${dockerStatus}`
-          }],
-          status: 'completed'
-        }]
-      };
-    });
-  }
-}, [setMetadata]);
+    useEffect(() => {
+      if (!metadata?.outputs || metadata.outputs.length === 0) {
+        const dockerStatus = metadata?.dockerStatus || 'unknown';
+        const statusMessage = `Console ready. Docker status: ${dockerStatus}`;
+        
+        setMetadata(prev => {
+          // Create formatted message for main console
+          const timestamp = new Date().toISOString().slice(11, 19);
+          const formattedMessage = `[${timestamp}][INFO] ${statusMessage}`;
+          
+          return {
+            ...(prev || {}), // Use empty object if prev is undefined
+            outputs: [{
+              id: generateUUID(),
+              contents: [{
+                type: 'text',
+                value: `> ${statusMessage}`
+              }],
+              status: 'completed'
+            }],
+            consoleEvents: [...(prev?.consoleEvents || []), formattedMessage]
+          };
+        });
+      }
+    }, [setMetadata]);
 
     // Calculate output counts for badges
     const errorCount = (metadata?.outputs || [])
@@ -502,9 +599,12 @@ useEffect(() => {
         consoleExpanded: false
       }));
       
+      // Log console minimize event
+      addConsoleEvent('INFO', 'Console minimized');
+      
       // We'll need to return false to the Console component to prevent default behavior
       return false;
-    }, [setMetadata]);
+    }, [setMetadata, addConsoleEvent]);
 
     return (
       <div className="relative w-full h-full">
@@ -615,20 +715,29 @@ useEffect(() => {
                     setConsoleOutputs={(outputs) => {
                       if (outputs.length === 0) {
                         // Replace with a default message
+                        const dockerStatusMessage = `Console cleared. Docker status: ${metadata?.dockerStatus || 'unknown'}`;
                         outputs = [{
                           id: generateUUID(),
                           contents: [{
                             type: 'text',
-                            value: `> Console cleared. Docker status: ${metadata?.dockerStatus || 'unknown'}`
+                            value: `> ${dockerStatusMessage}`
                           }],
                           status: 'completed'
                         }];
+                        
+                        // Also update the shared consoleEvents
+                        setMetadata(prev => ({
+                          ...prev,
+                          outputs,
+                          consoleEvents: [`[INFO] ${dockerStatusMessage}`]
+                        }));
+                      } else {
+                        // Just update the outputs normally
+                        setMetadata(prev => ({
+                          ...prev,
+                          outputs
+                        }));
                       }
-                      
-                      setMetadata(prev => ({
-                        ...prev,
-                        outputs
-                      }));
                     }}
                   />
                 </div>
@@ -710,6 +819,21 @@ useEffect(() => {
               : draftArtifact.isVisible,
           status: 'streaming',
         };
+        
+        // Add a console event for streaming
+        if (typeof draftArtifact.metadata !== 'undefined') {
+          const timestamp = new Date().toISOString().slice(11, 19);
+          const streamEvent = `[${timestamp}][STREAM] Content streaming update received (${streamPart.content.length} chars)`;
+          
+          // Ensure consoleEvents exists
+          const currentEvents = draftArtifact.metadata.consoleEvents || [];
+          
+          // Update the consoleEvents in the metadata
+          draftArtifact.metadata = {
+            ...draftArtifact.metadata,
+            consoleEvents: [...currentEvents, streamEvent]
+          };
+        }
         
         return updatedArtifact;
       });

@@ -38,37 +38,37 @@ function PureDocumentToolResult({
 
   return (
     <button
-      type="button"
-      className="bg-background cursor-pointer border py-2 px-3 rounded-xl w-fit flex flex-row gap-3 items-start"
-      onClick={(event) => {
-        if (isReadonly) {
-          toast.error(
-            'Viewing files in shared chats is currently not supported.',
-          );
-          return;
-        }
+  type="button"
+  className="bg-background cursor-pointer border border-gray-300 py-2 px-3 rounded-xl w-fit flex flex-row gap-3 items-start"
+  onClick={(event) => {
+    if (isReadonly) {
+      toast.error(
+        'Viewing files in shared chats is currently not supported.',
+      );
+      return;
+    }
 
-        const rect = event.currentTarget.getBoundingClientRect();
+    const rect = event.currentTarget.getBoundingClientRect();
 
-        const boundingBox = {
-          top: rect.top,
-          left: rect.left,
-          width: rect.width,
-          height: rect.height,
-        };
+    const boundingBox = {
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height,
+    };
 
-        setArtifact({
-          id: result.id,
-          documentId: result.id,
-          kind: result.kind,
-          content: '',
-          title: result.title,
-          isVisible: true,
-          status: 'idle',
-          boundingBox,
-        });
-      }}
-    >
+    setArtifact({
+      id: result.id,
+      documentId: result.id,
+      kind: result.kind,
+      content: '',
+      title: result.title,
+      isVisible: true,
+      status: 'idle',
+      boundingBox,
+    });
+  }}
+>
       <div className="text-muted-foreground mt-1">
         {type === 'create' ? (
           <FileIcon />

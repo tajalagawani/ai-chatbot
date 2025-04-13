@@ -36,7 +36,7 @@ function PureArtifactMessages({
   return (
     <div
       ref={messagesContainerRef}
-      className="flex flex-col gap-3 h-full items-center overflow-y-scroll pr-4  scale-[0.91] origin-center "
+      className="flex flex-col gap-3 h-full items-center overflow-y-scroll pr-3  scale-[0.94] origin-center "
     >
       {messages.map((message, index) => (
         <div key={message.id} className="w-full transform-gpu">

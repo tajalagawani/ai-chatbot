@@ -198,7 +198,7 @@ function PureMultimodalInput({
     <div className="relative w-full flex flex-col">
       {/* Premium notification - made smaller */}
       {showPremiumNotification && (
-        <div className="flex justify-between items-center px-4 py-2 bg-black text-white mb-1">
+        <div className="flex justify-between items-center px-4 py-2 bg-black text-white mb-1 border border-gray-800 rounded-lg">
           <p className="text-sm font-normal">Need more messages? Get higher limits with Premium.</p>
           <div className="flex items-center gap-2">
             <button className="text-teal-400 font-normal text-sm">Upgrade Plan</button>
@@ -325,7 +325,7 @@ function PureMultimodalInput({
       </div>
 
       {/* Disclaimer text restored */}
-      <p className="text-gray-500 text-xs px-2 mt-1">Orcha may make mistakes. Please use with discretion.</p>
+      <p className="text-gray-500 text-xs px-2 mb-1">Orcha may make mistakes. Please use with discretion.</p>
     </div>
   );
 }
